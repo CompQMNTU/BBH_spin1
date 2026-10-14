@@ -131,7 +131,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 |---|---|
 | Simple update (triangle variant) | `EnvBP` metric; triangle gate as 3-site MPO along path (x+1,y)→(x,y)→(x,y+1), `method='mpo'` |
 | Full update | `EnvCTM` metric in `evolution_step_` (or `EnvNTU` as cheaper default) |
-| Variational update | AD with `fp_ctmrg` (torch), L-BFGS |
+| Variational update | implicit-AD CTM: `fp_ctmrg` (torch), L-BFGS — workflow in `docs/ad_workflow.md` |
 | Hysteresis / warm start | load state from neighboring θ, continue |
 | U(1) for FQ/FM | `Spin1(sym='U1')` |
 
@@ -226,7 +226,7 @@ Every saved result records: model params, unit cell, D, χ, τ schedule, symmetr
 
 **M3 — NN imaginary-time evolution.** Triangle-gate simple update (EnvBP) and NTU; √3×√3 cell. *Accept:* (a) FM region energies = 3(cosθ+sinθ); (b) θ=0 at D=4–6 gives E below the D=1 value and approaches −1.84 trend; (c) 80-point θ scan at D≤6 shows the four phases with jumps in m and |Q| at π/4, π/2, 5π/4, and near the FQ/AFM3 boundary (paper: 1.873(7)π; small-D simple update may shift it) (paper Fig. 5 qualitatively).
 
-**M4 — Full update + AD, symmetries, benchmarks.** EnvCTM-metric FU and `fp_ctmrg` variational optimization; add the symmetry switch of §4.5 (U1, custom Z2×Z2, U1×U1) with its dense-agreement tests. *Accept:* θ=π/4 energy within 0.005 of 1.632 **with the U1×U1 config** (the paper needed SU(3) symmetry and D=12; dense alone is not expected to reach this — record the dense value as a separate data point); θ=0 extrapolation consistent with −1.8368(5) within combined error; FQ (U1) vs AFM3 (dense) hysteresis at θ = 1.86–1.89π gives θ_c within 1.873(7)π.
+**M4 — Full update + AD, symmetries, benchmarks.** EnvCTM-metric FU and `fp_ctmrg` variational optimization following `docs/ad_workflow.md` (its gradient gate §5 must pass first); add the symmetry switch of §4.5 (U1, custom Z2×Z2, U1×U1) with its dense-agreement tests. *Accept:* θ=π/4 energy within 0.005 of 1.632 **with the U1×U1 config** (the paper needed SU(3) symmetry and D=12; dense alone is not expected to reach this — record the dense value as a separate data point); θ=0 extrapolation consistent with −1.8368(5) within combined error; FQ (U1) vs AFM3 (dense) hysteresis at θ = 1.86–1.89π gives θ_c within 1.873(7)π.
 
 **M5 — NNN extension.** Add J₂, K₂ gates and measurements. *Accept:* (a) routing tests for (1,1), (−1,2), (2,−1) pass against ED on a small OBC patch; (b) D=1 energies with J₂ match an independent product-state minimizer (NNN contributes Σ_sublattices h₂(A,A) per site in the √3×√3 cell); (c) energy invariant under the two choices of gate path at convergence (within truncation error).
 
