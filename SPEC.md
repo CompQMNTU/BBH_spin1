@@ -22,29 +22,34 @@ In the paper, "next-nearest neighbor" refers to the **square-lattice diagonal** 
 
 ---
 
-## 1. What YASTN already provides (verified against docs, Oct 2026)
+## 1. What YASTN already provides (checked against source + tests, yastn 1.6.2.dev320+g7ed8ad0e6, 2026-10-14)
+
+Details, line references and the test scripts' results: `docs/yastn_findings.md`.
 
 | Need | YASTN object | Status |
 |---|---|---|
-| Spin-1 operators | `yastn.operators.Spin1(sym='dense'|'Z3'|'U1')`, basis (sz=+1,0,−1) for dense; `U1` charge = sz | ✅ |
-| Triangular geometry on square PEPS | `fpeps.TriangularLattice(dims=(3,3), boundary='infinite', full_patch=False)` — √3×√3, 3 tensors, `site2index = (y−x) mod 3`; `full_patch=True` → all Nx·Ny sites unique; `bonds(dirn='h'|'v'|'d')` | ✅ |
-| Diagonal bond convention | `Bond(s_b, s_r)` = `((x+1,y),(x,y+1))`, i.e. the **anti-diagonal** (bottom-left ↔ top-right) | ✅ (from `_geometry.py`) |
-| General unit cells | `fpeps.RectangularUnitcell(pattern)` — but it has **no** diagonal bonds; for triangular use `TriangularLattice(full_patch=True, dims=…)` | ✅ |
-| Gates | `fpeps.Gate(G, sites)`; `G` may be an MPO (or list of tensors) along a **path of NN sites**; a 2-site op beyond NN can be given with `sites` = full path | ✅ |
-| Gate builders | `gates.gate_nn_exp(step, I, H)`, `gates.gate_local_exp`, `yastn.fkron`, `gates.distribute(geometry, gates_nn, gates_local, symmetrize=True)` | ✅ |
-| Evolution | `fpeps.evolution_step_(env, gates, opts_svd, method='mpo', …)` with `EnvBP` (≈ simple update), `EnvNTU`, `EnvCTM` (full update), `EnvApproximate` | ✅ |
-| CTMRG | `fpeps.EnvCTM(psi, init, leg)`, `.iterate_(opts_svd, moves='hv', method='2x2', max_sweeps, corner_tol)` | ✅ |
-| Measurements | `measure_1site`, `measure_nn` (square NN only), `measure_2x2`, `envs/rdm.py`: `measure_rdm_1site`, `measure_rdm_nn`, `measure_rdm_diag`, `measure_rdm_2x2`, `measure_line`, `measure_nsite_exact` (exact rectangular window), `measure_nsite_exact_oe`, `measure_2site` (long-range, boundary MPS), `transfer_matrix_spectrum` (numpy only) | ✅ |
-| AD / variational | `yastn.tn.fpeps.envs.fixed_pt.fp_ctmrg` (torch backend, implicit differentiation, gauge fixing, `NoFixedPointError`) | ✅ |
+| Spin-1 operators | `yastn.operators.Spin1(sym='dense'|'Z3'|'U1')`, basis (sz=+1,0,−1) for dense; `U1` charge = sz (U1 `to_numpy` orders charges ascending: −1,0,+1) | ✅ |
+| Triangular geometry on square PEPS | `fpeps.TriangularLattice(dims=(3,3), boundary='infinite', full_patch=False)` — √3×√3, 3 tensors, `site2index = (y−x) mod 3`; `full_patch=True` → all Nx·Ny sites unique, any dims (tested (2,2),(2,3),(4,4),(6,6)); `bonds(dirn='h'|'v'|'d')` | ✅ infinite |
+| — OBC | `boundary='obc'` is **broken** for triangular: with `full_patch=True`, `bonds('d')` contains `Bond(None, …)`; with `full_patch=False`, `dims` is ignored (3 sites, bonds to nonexistent `Site(0,3)`) | ❌ filter bonds ourselves |
+| Diagonal bond convention | `Bond(s_b, s_r)` = `((x+1,y),(x,y+1))`, i.e. the **anti-diagonal** (bottom-left ↔ top-right) | ✅ |
+| General unit cells | `fpeps.RectangularUnitcell(pattern)` — **no** diagonal bonds (`bonds('d')` silently returns h+v); for triangular use `TriangularLattice(full_patch=True, dims=…)` | ✅ |
+| Gates | `fpeps.Gate(G, sites)`; `G` may be an MPO (or list of tensors) along a **path of NN sites**; a 2-site `G` with `sites` = full NN path gets identities on the middle sites (`fill_eye_in_gate`) | ✅ tested vs ED |
+| Gate builders | `gates.gate_nn_exp(step, I, H, bond=None)`, `gates.gate_local_exp(step, I, H, site=None)`, `yastn.fkron`, `gates.distribute(geometry, gates_nn, gates_local, symmetrize=True)` — **do not** use `distribute` with `TriangularLattice` (it emits bare diagonal gates, which raise) | ✅ / ⚠ |
+| Evolution | `fpeps.evolution_step_(env, gates, opts_svd, method='mpo'|'nn', …)` with `EnvBP` (≈ simple update; works although the docstring omits it), `EnvNTU`, `EnvCTM` (full update), `EnvApproximate` | ✅ |
+| CTMRG | `fpeps.EnvCTM(psi, init, leg)`, `.iterate_(opts_svd, moves='hv', method='2x2', max_sweeps, corner_tol)` (default method `'2x2 corner'`; `'2x2'` also accepted) | ✅ |
+| Measurements | `measure_1site`, `measure_nn` (square NN only; **raises** on the diagonal), `measure_2x2`, `measure_line` (h/v lines only), `measure_nsite_exact` (any rectangle; 2×3 knight window tested), `measure_2site` (long-range, boundary MPS), `transfer_matrix_spectrum` (numpy only). `measure_nsite_exact_oe` **does not exist**. | ✅ |
+| — rdm helpers | `envs/rdm.py`: `measure_rdm_nn`, `measure_rdm_diag`, `measure_rdm_2x2` **crash on dense configs** (`IndexError` from `O0.n[0]`); calling `rdm1x2`, `rdm2x1`, `rdm2x2_anti_diagonal` directly works | ❌ wrappers / ✅ low-level |
+| AD / variational | `yastn.tn.fpeps.envs.fixed_pt.fp_ctmrg` (torch backend, implicit differentiation, gauge fixing, `NoFixedPointError`). Returns **only `env`** (docstring says a tuple); module imports torch at top level | ✅ (code read; not run) |
+| Custom symmetry | no built-in Z2xZ2; a `sym_abelian` subclass passed as `make_config(sym=cls)` works (SVD tested). `Z2xU1` exists as a class but is not accepted as a string | ✅ |
+| Save / load | `to_dict` / `from_dict` round-trip a TriangularLattice PEPS (`save_to_dict` deprecated) | ✅ |
 
-### UNVERIFIED — must be checked in M0 before anything else
-Source reading below was done against yastn `1.6.2.dev320+g7ed8ad0e6` (2026-10-14); re-check if the pinned version changes.
-- **U1.** `gates.distribute` assigns the TriangularLattice diagonal `Bond((x+1,y),(x,y+1))` as a 2-site `sites` tuple. Those sites are *not* square NN.
-  *Source reading:* `Peps.apply_gate_` (`_peps.py`) calls `nn_bond_dirn(s0, s1)` for each consecutive pair in `gate.sites`, and `nn_bond_dirn` (`_geometry.py`) raises `YastnError` for non-NN pairs → a bare diagonal 2-site gate should **raise**, not be auto-routed. A 2-site `G` with `sites` = a longer NN path gets identities inserted on the middle sites by `fill_eye_in_gate` (`_gates_auxiliary.py`), and `evolution_step_` then truncates **every** bond along the path in turn. This is the mechanism for Option B and the NNN gates (§4.2).
-  *Still to do:* confirm both behaviors with a test (`test_routing.py`) and an ED comparison. **Do not trust any gate until that passes.**
-- **U2.** Whether `measure_nn` accepts diagonal bonds of `TriangularLattice`. Assume **no**. Check `measure_rdm_diag` (`envs/rdm.py`) as a cheaper alternative to `measure_2x2`.
-- **U3.** Whether `measure_nsite_exact` handles a 2×3 / 3×2 window at the target D, χ within memory (needed for NNN knight-move bonds).
-- **U4.** Whether `fp_ctmrg` works with `TriangularLattice` geometry (it should — it only sees the square network — but test).
+**Defaults that iterate over all bonds break on TriangularLattice** (they hit the diagonal and raise `YastnError: Site(1, 0), Site(0, 1) are not nearest-neighbor sites.`): `measure_nn()`, `EnvBP.measure_nn()`, `truncate_(bond=None)`, `Peps.get_bond_dimensions()`, `gates.distribute`. Always pass explicit h/v bonds.
+
+### M0 items (U1–U4)
+- **U1 — resolved.** A bare 2-site diagonal gate raises the error above (EnvBP and EnvNTU). A 2-site gate given with `sites` = an NN path matched exact ED (overlap 1 to 1e-15) on a 2×3 OBC entangled state for both 3-site diagonal paths, the (1,1) path and all three 4-site knight paths, with EnvBP/EnvNTU in `mpo` and `nn` modes; wrong placements give overlap 0.86–0.91. `evolution_step_` truncates **every** bond along the path. Keep `test_routing.py` as a regression test.
+- **U2 — resolved.** Diagonal bonds: use `measure_2x2`, `measure_nsite_exact`, or a direct `rdm2x2_anti_diagonal` contraction (all three agree to ~1e-15). Not `measure_nn`, `measure_rdm_diag` (dense crash), or `measure_line`.
+- **U3 — partly.** `measure_nsite_exact` runs on a 2×3 window at small D. Memory/time at the target D, χ is still open; profile before M5.
+- **U4 — code read only.** `fp_ctmrg` uses only `sites()`, `site2index`, `nn_site`, `Nx`, `Ny`, so it looks geometry-agnostic. Run a torch test at M4.
 
 Record findings in `docs/yastn_findings.md`.
 
@@ -113,7 +118,7 @@ Q-norm of |sz=0⟩ = 2/√3; of |±1⟩ = 1/√3.
 
 Exact-diagonalization check (to write): primary role is catching operator / bond-routing bugs, not accuracy.
 - **Do not use a 3×3 torus when J₂, K₂ ≠ 0.** Mod 3, all three NNN vectors (1,1), (−1,2), (2,−1) reduce to ±(1,1). Each site then has only 2 distinct NNN partners, and 3rd neighbors coincide with NN. Bond classes become indistinguishable, which defeats the routing test.
-- Primary: **OBC** 3×3 triangular cluster (3⁹ = 19683 states, `scipy.sparse.linalg.eigsh`) with the same bond list as `TriangularLattice(dims=(3,3), boundary='obc')`. It contains all bond classes, including both knight moves. Compare against the finite PEPS.
+- Primary: **OBC** 3×3 triangular cluster (3⁹ = 19683 states, `scipy.sparse.linalg.eigsh`) (6 h + 6 v + 4 diagonal = 16 NN bonds). It contains all bond classes, including both knight moves. `TriangularLattice(boundary='obc')` is broken (§1), so build the finite PEPS with `full_patch=True` and filter out bonds containing `None` in `lattice.py`; the ED and PEPS bond lists must come from the same function. Reference: E0 = 6.0015950 at θ=π/4, J₂=K₂=0 (docs/yastn_findings.md).
 - Gate-level check (in `test_routing.py`): apply a single gate exp(−τ h) to a product/random finite PEPS without truncation, contract exactly, and compare with the ED vector. This isolates routing from optimization.
 - Optional periodic check: the torus must keep the shells distinct. Among axis-aligned Lx×Ly tori, any side = 3 collapses NNN. **4×4 is the smallest** with distinct NN+NNN (3¹⁶ = 43,046,721 states; 5,196,627 ≈ 5.2·10⁶ in Sz=0). 5×5 is the smallest that also separates 3rd neighbors. 4×4 cannot host 3-sublattice order, which is fine for a routing check. Assert bond multiplicities explicitly (3N NN, 3N NNN).
 
@@ -140,7 +145,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 
 ### 4.3 Environment / measurement
 - CTMRG `method='2x2'`, χ ≥ D², `corner_tol=1e-10`; check χ convergence explicitly (χ, 1.5χ).
-- NN: `measure_nn` for h/v, `measure_2x2` for diagonal.
+- NN: `measure_nn` for h/v (explicit bonds only), `measure_2x2` or `measure_nsite_exact` for the diagonal (U2).
 - NNN (1,1): `measure_2x2`. Knight moves: `measure_nsite_exact` on 2×3 / 3×2 windows (cost check U3). For AD, energy must be differentiable through these.
 - Long-range ⟨S_0·S_r⟩, ⟨Q_0·Q_r⟩ via `measure_2site` → structure factors at Γ, K, M.
 
@@ -247,7 +252,8 @@ Use unit cells §4.4, D up to the cost limit, compare energies across cells, and
 - AFM3 runs can drift into FQ at high D near θ_c (paper footnote 75); flag runs whose m drops discontinuously during optimization.
 - Simple update can miss phases near transitions; never report SU-only boundaries without FU/AD checks.
 - Knight-move NNN terms make every evolution step and energy evaluation markedly more expensive; profile at D=3 before launching scans.
-- For AD: wrap `fp_ctmrg` in `NoFixedPointError` handling (perturb and retry), and checkpoint every optimizer step.
+- Threading: set `OMP_NUM_THREADS=1` (and `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`) for small-D runs and in every SLURM template. With default threading on 48 cores, D=2 NTU took ~10 s/step. Even single-threaded, D=3 NTU did not finish 100 steps in 8 min at θ=π/4, so NTU cost must be profiled before M3 scans; EnvBP is the practical default at small D.
+- For AD: `fp_ctmrg` returns only `env`, whatever its docstring says. Wrap it in `NoFixedPointError` handling (perturb and retry), and checkpoint every optimizer step.
 - `transfer_matrix_spectrum` is numpy-only; compute correlation lengths in a separate post-processing pass.
 - Keep numpy backend for evolution, torch only for AD; never mix configs in one state object.
 
