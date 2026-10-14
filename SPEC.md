@@ -132,11 +132,11 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 
 ### 4.2 Gates
 - **Option A (paper-like, preferred):** decompose H = Σ_▲ h_▲ over up-triangles; each up-triangle {(x,y),(x,y+1),(x+1,y)} contains one h, one v and one diagonal bond, and every NN bond belongs to exactly one up-triangle. Build exp(−τ h_▲) on 27-dim space, SVD into a 3-site MPO along the L-path (x+1,y)–(x,y)–(x,y+1), apply with `method='mpo'`. One gate application per triangle, followed by sequential truncation of both L-path bonds ((x+1,y)–(x,y) and (x,y)–(x,y+1)), per §1 U1.
-- **Option B:** bond-by-bond: h, v via `gate_nn_exp`; diagonal via 2-site op on a 3-site path (identity on middle site) — only after U1 is resolved.
+- **Option B:** bond-by-bond: h, v via `gate_nn_exp`; diagonal via 2-site op on a 3-site path (identity on middle site) — only after U1 is resolved. Do not feed `TriangularLattice` straight into `gates.distribute`: it iterates `geometry.bonds()`, which includes the diagonal 2-site bonds, and those should raise (§1 U1). Build the gate list yourself.
 - **NNN gates:**
   - (1,1): path (x,y)→(x,y+1)→(x+1,y+1) [or via (x+1,y)]; alternate the two paths between sweeps to avoid bias.
   - (−1,2), (2,−1): 4-site paths (Manhattan distance 3). Either straight-then-turn path; alternate. Expect higher truncation error — monitor `accumulated_truncation_error`.
-- Second-order Trotter (`symmetrize=True`), τ schedule e.g. 0.1 → 0.05 → 0.02 → 0.01, stop on energy change < 1e-7 per stage.
+- Second-order Trotter: `gates.distribute(..., symmetrize=True)` only appends the reversed list of the gates **it** built (`gates.py`, `distribute`), with each gate built at step τ/2. Triangle and NNN gates are built by `bbh_tri.gates`, so do the same there: build every gate as exp(−(τ/2)h) and append the reversed list (optionally with reversed `sites`). τ schedule e.g. 0.1 → 0.05 → 0.02 → 0.01, stop on energy change < 1e-7 per stage.
 
 ### 4.3 Environment / measurement
 - CTMRG `method='2x2'`, χ ≥ D², `corner_tol=1e-10`; check χ convergence explicitly (χ, 1.5χ).
@@ -157,10 +157,11 @@ Symmetries are not needed for correctness; they buy bond dimension (paper: FQ wi
 |---|---|---|---|
 | FM (moment ∥ z) | U(1) (Sz) | `Spin1(sym='U1')` | exact product state; symmetry barely matters |
 | FQ (director ∥ z, \|0⟩) | U(1) | `Spin1(sym='U1')` | as in the paper |
-| AFQ (directors x, y, z) | **Z₂×Z₂** = {e^{iπSx}, e^{iπSy}, e^{iπSz}} (commute for integer spin) | custom: no built-in Z2xZ2 in yastn/sym (has Z2, Z3, U1, U1xU1, Z2xU1, U1xU1xZ2) → define one by subclassing `sym_abelian` (model: `sym_Z2xU1.py`); fallback `make_config(sym='Z2')` = Sz parity only + own operators in the \|x⟩,\|y⟩,\|z⟩ basis | \|x⟩,\|y⟩,\|z⟩ are joint eigenstates (charges (0,1),(1,0),(1,1) up to convention); \|x⟩,\|y⟩ mix Sz=±1; not U(1) |
+| AFQ (directors x, y, z) | **Z₂×Z₂** = {e^{iπSx}, e^{iπSy}, e^{iπSz}} (commute for integer spin) | custom: no built-in Z2xZ2 in yastn/sym (has Z2, Z3, U1, U1xU1, Z2xU1, U1xU1xZ2) → define one by subclassing `sym_abelian` (model: `sym_Z2xU1.py`); operators written in the \|x⟩,\|y⟩,\|z⟩ basis. Fallback: `make_config(sym='Z2')` = Sz parity only | \|x⟩,\|y⟩,\|z⟩ are joint eigenstates (charges (0,1),(1,0),(1,1) up to convention); \|x⟩,\|y⟩ mix Sz=±1; not U(1) |
 | AFM3, 120° coplanar | none | `dense` | coplanar order breaks every U(1); no on-site Z_n leaves it invariant |
 | SU(3) point θ=π/4 | U(1)×U(1) (flavor counts) | custom config | choose degenerate state with sublattices \|+1⟩,\|0⟩,\|−1⟩; only way to approach D≈12–16 |
 | NNN: collinear stripe / up-up-down | U(1) | `Spin1(sym='U1')` | collinear along z |
+| NNN: tetrahedral (4-sublattice, non-coplanar) | none | `dense` | needs a (2,2)-compatible cell (§4.4); reported by Szasz et al. (§7) |
 | NNN: disordered / spin-liquid candidate | U(1) | `Spin1(sym='U1')` | largest payoff (large D needed) |
 
 Correction to earlier drafts: YASTN's `Spin1(sym='Z3')` is Sz mod 3, a subgroup of U(1). It is therefore valid wherever U(1) is (FM, FQ, collinear states, the SU(3) point), but always strictly weaker than U(1) there and useless for AFQ/AFM3. Do not use it.
@@ -196,10 +197,10 @@ BBH_spin1/                # repo root; Python package name: bbh_tri
     cli.py                # `bbh-run config.yaml`, `bbh-scan`, `bbh-hysteresis`
   tests/
     test_lattice.py       # vector norms, sublattice invariance of NNN, path validity
-    test_operators.py     # Casimir=2, (S·S) spectrum {-2,-1,1}, Q-norm of |0>=2/sqrt3, U1 vs dense agree
+    test_operators.py     # Casimir=2, (S·S) spectrum {-2,-1,1}, Q traceless, Q·Q = 2(S·S)²+S·S−8/3, |Q|(|0>)=2/sqrt3, |Q|(|±1>)=1/sqrt3, U1 vs dense agree
     test_gates.py         # MPO gate reconstructs exp(-tau h) to 1e-12 (dense contraction)
     test_product_states.py# D=1 energies of §3 table, via full CTM measurement
-    test_ed_small.py      # 3x3 cluster ED vs finite PEPS (slow marker)
+    test_ed_small.py      # OBC 3x3 cluster ED vs finite PEPS (slow marker); optional 4x4 torus (§3)
     test_routing.py       # U1/U2: diagonal & knight gates act on correct sites (2-site ED on a 2x3 OBC patch)
   configs/                # yaml for benchmarks and scans
   scripts/slurm/          # array-job templates
@@ -218,30 +219,30 @@ Every saved result records: model params, unit cell, D, χ, τ schedule, symmetr
 
 **M2 — D=1 / product states.** Measure product states through the full YASTN pipeline. *Accept:* §3 product-state table reproduced to 1e-10 using the optimized general product state (not 120° coherent) for AFM3; mean-field onset of m (continuous) at arctan(−2)+2π, with E = 6 sin θ for 3π/2 < θ ≤ θ_c^MF.
 
-**M3 — NN imaginary-time evolution.** Triangle-gate simple update (EnvBP) and NTU; √3×√3 cell. *Accept:* (a) FM region energies = 3(cosθ+sinθ); (b) θ=0 at D=4–6 gives E below the D=1 value and approaches −1.84 trend; (c) 80-point θ scan at D≤6 shows the four phases with jumps in m and |Q| at π/4, π/2, 5π/4, ~1.9π (paper Fig. 5 qualitatively).
+**M3 — NN imaginary-time evolution.** Triangle-gate simple update (EnvBP) and NTU; √3×√3 cell. *Accept:* (a) FM region energies = 3(cosθ+sinθ); (b) θ=0 at D=4–6 gives E below the D=1 value and approaches −1.84 trend; (c) 80-point θ scan at D≤6 shows the four phases with jumps in m and |Q| at π/4, π/2, 5π/4, and near the FQ/AFM3 boundary (paper: 1.873(7)π; small-D simple update may shift it) (paper Fig. 5 qualitatively).
 
 **M4 — Full update + AD, symmetries, benchmarks.** EnvCTM-metric FU and `fp_ctmrg` variational optimization; add the symmetry switch of §4.5 (U1, custom Z2×Z2, U1×U1) with its dense-agreement tests. *Accept:* θ=π/4 energy within 0.005 of 1.632 **with the U1×U1 config** (the paper needed SU(3) symmetry and D=12; dense alone is not expected to reach this — record the dense value as a separate data point); θ=0 extrapolation consistent with −1.8368(5) within combined error; FQ (U1) vs AFM3 (dense) hysteresis at θ = 1.86–1.89π gives θ_c within 1.873(7)π.
 
 **M5 — NNN extension.** Add J₂, K₂ gates and measurements. *Accept:* (a) routing tests for (1,1), (−1,2), (2,−1) pass against ED on a small OBC patch; (b) D=1 energies with J₂ match an independent product-state minimizer (NNN contributes Σ_sublattices h₂(A,A) per site in the √3×√3 cell); (c) energy invariant under the two choices of gate path at convergence (within truncation error).
 
 **M6 — Physics scans.** Start with K₂ = 0 and J₂ ≥ 0 (antiferro) along cuts through the NN phases. Priority cuts:
-1. θ = 0 (Heisenberg) vs J₂/|J₁| ∈ [0, 0.3]: 120° → (possible disordered) → stripe.
+1. θ = 0 (Heisenberg) vs J₂/|J₁| ∈ [0, 0.3]: 120° → stripe (classical threshold J₂ = 1/8); check for intermediate phases rather than assume one.
 2. Near the FQ/AFM3 boundary (θ ≈ 1.85–1.9π) vs J₂: does NNN open an intermediate phase?
-3. AFQ region (π/4 < θ < π/2) vs J₂.
+3. AFQ region (π/4 < θ < π/2) and its boundary with 120° vs J₂: test Szasz et al.'s direct continuous 120°→AFQ transition (§7); first-order hysteresis tools alone are not enough here — also track how m and |Q| vanish with D.
 Use unit cells §4.4, D up to the cost limit, compare energies across cells, and look at bond-energy anisotropy (nematic / VBS signatures) and S(q).
 
 ---
 
 ## 7. Prior work to compare against (NNN)
 
-- A. Szasz, C. Wang, Y.-C. He, arXiv:2206.04087 — DMRG on the spin-1 triangular model with **NN + NNN bilinear** and **NN biquadratic** couplings (i.e. J₂ only, no K₂). They report several magnetic and nematic phases and at least one disordered phase that may be a spin liquid. This is the natural first target: map our (θ, J₂) to their (J, K, J₂) with J = cos θ, K = sin θ, and check whether iPEPS (2D, no cylinder bias) confirms the disordered region. Their paper also notes that the J–K–J₂ triangular model had previously been treated only in a large-S expansion.
+- A. Szasz, C. Wang, Y.-C. He, arXiv:2206.04087 — DMRG on the spin-1 triangular model with **NN + NNN bilinear** and **NN biquadratic** couplings (i.e. J₂ only, no K₂). Per their abstract (opened 2026-10-14): three magnetically ordered phases (120°, stripe, **tetrahedral**), two nematic phases (FQ, AFQ), and a likely **direct continuous 120° → AFQ transition rather than a spin liquid** in between. (Earlier drafts of this SPEC wrongly said they found a disordered/spin-liquid phase.) This is the natural first target: the open questions for iPEPS (2D, no cylinder bias) are whether the 120°–AFQ transition is really direct and continuous, and where the stripe/tetrahedral boundaries lie. Before mapping our (θ, J₂) to their couplings, read their Hamiltonian convention from the paper body (biquadratic as K(S·S)² vs a Q·Q form shifts the mapping); J = cos θ, K = sin θ is only a guess until checked. Unverified (from an earlier draft): that the J–K–J₂ model was previously treated only in a large-S expansion.
 - Before M6, do a quick literature pass for later work (2022–2026) on the same model and on J₃ variants relevant to NiGa₂S₄; add to `docs/literature.md`. Do not cite anything not actually opened.
 
 ---
 
 ## 8. Pitfalls / guardrails
 
-- First-order transitions everywhere: never infer a phase boundary from a single initialization; always compare energies of distinct seeded states (hysteresis), as in the paper.
+- All NN-model transitions are first order (paper). With NNN this is **not** guaranteed: Szasz et al. find a likely continuous 120°→AFQ transition, and the mean-field FQ→AFM3 onset is continuous (§3). Regardless of order: never infer a phase boundary from a single initialization; always compare energies of distinct seeded states (hysteresis), as in the paper.
 - Near FM, states are ~product: D→∞ extrapolation is unnecessary and fits will be noise.
 - AFM3 runs can drift into FQ at high D near θ_c (paper footnote 75); flag runs whose m drops discontinuously during optimization.
 - Simple update can miss phases near transitions; never report SU-only boundaries without FU/AD checks.
