@@ -100,7 +100,7 @@ Independently computed product-state (D=1, 3-sublattice) values (my check, to be
 | π/4 | 3/√2 = 2.1213 | degenerate manifold of mutually orthogonal triads (e.g. \|+1⟩,\|0⟩,\|−1⟩ or x,y,z directors). The 120° coherent state is **not** in it: it gives 2.254 |
 | π/2 | 3.0 | AFQ = FM degenerate |
 | 5π/4 | −3√2 = −4.2426 | FM = FQ degenerate |
-| 1.6476π | −5.3664 | FQ/AFM3 mean-field transition; FQ energy = 6 sin θ |
+| arctan(−2)+2π ≈ 1.64758π | −12/√5 = −5.36656 | FQ/AFM3 mean-field transition; FQ energy = 6 sin θ (tests use the exact angle, not 1.6476π) |
 
 Product-state formulas: E_FQ = 6 sin θ, E_AFQ = 3 sin θ, E_FM = 3(cos θ + sin θ).
 Q-norm of |sz=0⟩ = 2/√3; of |±1⟩ = 1/√3.
@@ -115,7 +115,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 - **Do not use a 3×3 torus when J₂, K₂ ≠ 0.** Mod 3, all three NNN vectors (1,1), (−1,2), (2,−1) reduce to ±(1,1). Each site then has only 2 distinct NNN partners, and 3rd neighbors coincide with NN. Bond classes become indistinguishable, which defeats the routing test.
 - Primary: **OBC** 3×3 triangular cluster (3⁹ = 19683 states, `scipy.sparse.linalg.eigsh`) with the same bond list as `TriangularLattice(dims=(3,3), boundary='obc')`. It contains all bond classes, including both knight moves. Compare against the finite PEPS.
 - Gate-level check (in `test_routing.py`): apply a single gate exp(−τ h) to a product/random finite PEPS without truncation, contract exactly, and compare with the ED vector. This isolates routing from optimization.
-- Optional periodic check: the torus must keep the shells distinct. Among axis-aligned Lx×Ly tori, any side = 3 collapses NNN. **4×4 is the smallest** with distinct NN+NNN (3¹⁶ states, ≈1.1·10⁷ in Sz=0). 5×5 is the smallest that also separates 3rd neighbors. 4×4 cannot host 3-sublattice order, which is fine for a routing check. Assert bond multiplicities explicitly (3N NN, 3N NNN).
+- Optional periodic check: the torus must keep the shells distinct. Among axis-aligned Lx×Ly tori, any side = 3 collapses NNN. **4×4 is the smallest** with distinct NN+NNN (3¹⁶ = 43,046,721 states; 5,196,627 ≈ 5.2·10⁶ in Sz=0). 5×5 is the smallest that also separates 3rd neighbors. 4×4 cannot host 3-sublattice order, which is fine for a routing check. Assert bond multiplicities explicitly (3N NN, 3N NNN).
 
 ---
 
@@ -131,7 +131,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 | U(1) for FQ/FM | `Spin1(sym='U1')` |
 
 ### 4.2 Gates
-- **Option A (paper-like, preferred):** decompose H = Σ_▲ h_▲ over up-triangles; each up-triangle {(x,y),(x,y+1),(x+1,y)} contains one h, one v and one diagonal bond, and every NN bond belongs to exactly one up-triangle. Build exp(−τ h_▲) on 27-dim space, SVD into a 3-site MPO along the L-path (x+1,y)–(x,y)–(x,y+1), apply with `method='mpo'`, truncate once per triangle.
+- **Option A (paper-like, preferred):** decompose H = Σ_▲ h_▲ over up-triangles; each up-triangle {(x,y),(x,y+1),(x+1,y)} contains one h, one v and one diagonal bond, and every NN bond belongs to exactly one up-triangle. Build exp(−τ h_▲) on 27-dim space, SVD into a 3-site MPO along the L-path (x+1,y)–(x,y)–(x,y+1), apply with `method='mpo'`. One gate application per triangle, followed by sequential truncation of both L-path bonds ((x+1,y)–(x,y) and (x,y)–(x,y+1)), per §1 U1.
 - **Option B:** bond-by-bond: h, v via `gate_nn_exp`; diagonal via 2-site op on a 3-site path (identity on middle site) — only after U1 is resolved.
 - **NNN gates:**
   - (1,1): path (x,y)→(x,y+1)→(x+1,y+1) [or via (x+1,y)]; alternate the two paths between sweeps to avoid bias.
@@ -163,7 +163,7 @@ Symmetries are not needed for correctness; they buy bond dimension (paper: FQ wi
 | NNN: collinear stripe / up-up-down | U(1) | `Spin1(sym='U1')` | collinear along z |
 | NNN: disordered / spin-liquid candidate | U(1) | `Spin1(sym='U1')` | largest payoff (large D needed) |
 
-Correction to earlier drafts: YASTN's `Spin1(sym='Z3')` is Sz mod 3 and fits none of these phases except trivially as a subgroup of U(1) at the SU(3) point. Do not use it.
+Correction to earlier drafts: YASTN's `Spin1(sym='Z3')` is Sz mod 3, a subgroup of U(1). It is therefore valid wherever U(1) is (FM, FQ, collinear states, the SU(3) point), but always strictly weaker than U(1) there and useless for AFQ/AFM3. Do not use it.
 
 Rules:
 - Build and validate everything **dense** through M3; add symmetry as a config switch at M4.
