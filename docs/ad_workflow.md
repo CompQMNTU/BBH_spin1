@@ -88,6 +88,8 @@ The optimizer's energy is measured at χ_opt with `corner_tol`=1e-8. Never repor
 
 ## 5. Gradient quality gate (before any production chain)
 
+**Status (M0, 2026-10-15): fails.** AD vs FD differ by ~2% at χ=8 and ~40% at χ≥16 at D=2. The error is in differentiating the CTM step, not in the fixed-point series (`docs/yastn_findings.md` U4). Resolve this first.
+
 - **Finite-difference check** at θ=π/4, D=2, χ=8, √3×√3, dense float64:
   - Use a random direction v and compare (E(x+εv) − E(x−εv))/2ε with ∇E·v for ε ∈ {1e-3, 1e-4, 1e-5}.
   - Acceptance: relative error < 1e-4. Also report how many backward steps were taken and whether they stalled.

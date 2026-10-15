@@ -49,7 +49,7 @@ Details, line references and the test scripts' results: `docs/yastn_findings.md`
 - **U1 — resolved.** A bare 2-site diagonal gate raises the error above (EnvBP and EnvNTU). A 2-site gate given with `sites` = an NN path matched exact ED (overlap 1 to 1e-15) on a 2×3 OBC entangled state for both 3-site diagonal paths, the (1,1) path and all three 4-site knight paths, with EnvBP/EnvNTU in `mpo` and `nn` modes; wrong placements give overlap 0.86–0.91. `evolution_step_` truncates **every** bond along the path. Keep `test_routing.py` as a regression test.
 - **U2 — resolved.** Diagonal bonds: use `measure_2x2`, `measure_nsite_exact`, or a direct `rdm2x2_anti_diagonal` contraction (all three agree to ~1e-15). Not `measure_nn`, `measure_rdm_diag` (dense crash), or `measure_line`.
 - **U3 — partly.** `measure_nsite_exact` runs on a 2×3 window at small D. Memory/time at the target D, χ is still open; profile before M5.
-- **U4 — code read only.** `fp_ctmrg` uses only `sites()`, `site2index`, `nn_site`, `Nx`, `Ny`, so it looks geometry-agnostic. Run a torch test at M4.
+- **U4 — runs, gradient wrong.** `fp_ctmrg` works on `TriangularLattice` (same numbers as the equivalent `RectangularUnitcell`), but its gradient misses finite differences by ~2% at χ=8 and ~40% at χ≥16. Plain backprop through `ctmrg_` gives the same AD value, so the error is in differentiating the CTM step (likely the SVD backward under truncation / near-zero singular values). **Blocks M4** until fixed; see `docs/yastn_findings.md` U4 and the xfail test in `tests/test_fp_ctmrg.py`.
 
 Record findings in `docs/yastn_findings.md`.
 

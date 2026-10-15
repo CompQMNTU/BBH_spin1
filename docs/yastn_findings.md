@@ -3,7 +3,7 @@
 yastn `1.6.2.dev320+g7ed8ad0e6`, built with
 `uv run --no-project --with "yastn @ git+https://github.com/yastn/yastn@7ed8ad0e6" --with numpy,scipy`.
 Line numbers refer to that version. Checked 2026-10-14; re-check if the pin in `pyproject.toml` changes.
-The test scripts were throwaway session scripts. Port the relevant ones into `tests/` (`test_routing.py`, `test_product_states.py`) at M0/M1.
+Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`). Run everything with `uv run pytest -m "slow or not slow"` (~25 s).
 
 ## API (summary of SPEC §1)
 
@@ -51,9 +51,24 @@ The test scripts were throwaway session scripts. Port the relevant ones into `te
 
 `measure_nsite_exact` runs on a 2×3 window at small D. Cost at the target D, χ is not yet measured.
 
-## U4 — `fp_ctmrg` on TriangularLattice (code read only)
+## U4 — `fp_ctmrg` on TriangularLattice (runs; gradient wrong)
 
-Uses only `sites()`, `site2index`, `nn_site`, `Nx`, `Ny` (`fixed_pt.py:577-610`), so it looks geometry-agnostic. Not run; needs a torch test at M4.
+Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularLattice, dense, D=2 random tensors (normalized), loss = Σ_diag ⟨Sz Sz⟩ via `rdm2x2_anti_diagonal`, `fp_ctmrg` with `policy='fullrank'`, `corner_tol=1e-10`. Check: directional derivative along a random direction, AD vs central finite differences (FD stable to 1e-8 for ε = 1e-3…1e-5). One forward+backward ≈ 4–5 s.
+
+- **Runs:** forward converges, backward series converges (last `full grad diff` ≈ 1e-10), gradient finite. Returns only `env`.
+- **Gradient is wrong:**
+
+  | χ | SVD tol | AD (`fp_ctmrg`) | AD (plain backprop through `ctmrg_`) | FD | rel. error |
+  |---|---|---|---|---|---|
+  | 4 | 1e-14 | 0.14004 | — | 0.14168 | 1.2e-2 |
+  | 8 | 1e-14 / 1e-8 | 0.144614 | 0.144614 | 0.141671 | 2.0e-2 |
+  | 16 | 1e-14 | 11.39 | — | 0.14166 | ≈1 |
+  | 16 | 1e-8 | 0.2348 | 1.9e5 | 0.14167 | 0.40 (fp) |
+  | 24 | 1e-8 | 0.2348 | — | 0.14167 | 0.40 (χ=24, tol 1e-14: CTM forward does not converge → `NoFixedPointError`) |
+
+- **Localization:** at χ=8, plain backprop and `fp_ctmrg` agree to 9 digits but both miss FD by 2% → not the fixed-point series. `RectangularUnitcell(pattern=[[0,1,2],[2,0,1],[1,2,0]])` (same square network) gives identical numbers → not the triangular geometry. FD at χ=16 and 24 agree → the environment is saturated there, yet AD is worse.
+- **Likely cause (not proven):** the torch SVD backward (`backend/linalg/torch_svd_gesdd.py`, `SVDGESDD.backward`) is the full-SVD formula with a 1e-12 regularizer. Under truncation it omits the coupling to the discarded singular vectors (fits the 1–2% at χ = 4–8); with kept near-zero singular values it amplifies 1/σ terms (fits the blow-up at χ ≥ 16).
+- **Consequence:** the AD gradient gate (`docs/ad_workflow.md` §5) fails today. M4 must fix or work around this before any variational optimization. Candidate directions: a truncated-SVD backward with the discarded-subspace correction; choosing χ/tol so no near-zero singular values are kept; comparing with an eigendecomposition-based projector. Next diagnostic: check whether the error tracks the discarded weight at χ=4–8.
 
 ## Symmetric configs
 
@@ -82,6 +97,10 @@ Notes:
 - CTM did not reach `corner_tol=1e-11` in 300 sweeps on the final runs (remaining change 1e-7 to 1e-9). At D=2, χ=6 reported max_D=4.
 
 ## Performance
+
+- **NTU with untruncated path gates:** a path gate through a bond that already has D≈9 grows it toward 81, and NTU's metric optimization then takes minutes (knight path (1,0)→(1,1)→(0,1)→(0,2) after D=9 entangling: >5 min). Keep D small in such tests; in production every path bond is truncated anyway.
+- **yastn bug:** `evolution_step_(..., max_iter=0)` raises `UnboundLocalError: cannot access local variable 'error2'` in `optimize_truncation` (`_evolution.py:852`).
+- **Warning (harmless):** with the torch backend, `Spin1` construction casts complex values to real (`backend_torch.py:230`).
 
 - Default threading on 48 cores: D=2 NTU took ~10 s per step. Set `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`.
 - Single-threaded, D=3 NTU did not finish 100 steps in 8 min. Profile NTU before M3; EnvBP is the practical small-D default.
