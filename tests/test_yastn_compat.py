@@ -126,22 +126,34 @@ def test_degeneracy_threshold_is_block_local():
     assert (b1.grad * d).sum().item() == pytest.approx(fd, rel=1e-6)
 
 
-@pytest.mark.ad
-def test_degenerate_small_pair_warns_despite_small_raw_weight():
-    """Codex review of PR #4 (3rd pass): A = diag(1, .7, 1e-8, 1e-8), L = R01 + R10 + R23 + R32 of
-    R = U S V. The backward gives dL/dA23 = 0 instead of 1, while the raw gradient into the small
-    degenerate pair is only ~1e-8 of the total; the 1/sigma-scaled weight must flag it."""
+def _small_pair_loss_backward(small):
+    """A = diag(1, .7, small, small), L = R01 + R10 + R23 + R32 of R = U S V; the true dL/dA23 is 1."""
     import torch
-    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
     cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    T = yastn.Tensor(config=cfg, s=(1, -1))
+    A = torch.diag(torch.tensor([1.0, 0.7, small, small], dtype=torch.float64)).requires_grad_()
+    T.set_block(val=A, Ds=(4, 4))
+    U, S, V = yastn.linalg.svd(T, axes=(0, 1))
+    R = (U @ S @ V).to_dense()
+    (R[0, 1] + R[1, 0] + R[2, 3] + R[3, 2]).backward()
+    return A.grad
 
-    def loss(A):
-        T = yastn.Tensor(config=cfg, s=(1, -1))
-        T.set_block(val=A, Ds=(4, 4))
-        U, S, V = yastn.linalg.svd(T, axes=(0, 1))
-        R = (U @ S @ V).to_dense()
-        return R[0, 1] + R[1, 0] + R[2, 3] + R[3, 2]
 
-    A = torch.diag(torch.tensor([1.0, 0.7, 1e-8, 1e-8], dtype=torch.float64)).requires_grad_()
+@pytest.mark.ad
+@pytest.mark.parametrize("small", [1e-8, 1e-22, 1e-300])
+def test_degenerate_small_pair_warns_despite_small_raw_weight(small):
+    """Codex review of PR #4 (3rd and 4th pass): the backward gives dL/dA23 = 0 instead of 1, while
+    the raw gradient into the small degenerate pair is ~small of the total. The 1/sigma-scaled
+    weight must flag it at any nonzero scale, including below eps * sigma_max."""
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
     with exact_svd_backward(), pytest.warns(DegenerateSVDWarning):
-        loss(A).backward()
+        _small_pair_loss_backward(small)
+
+
+@pytest.mark.ad
+@pytest.mark.xfail(strict=True, reason="undetectable: gU, gV carry a factor sigma = 0, so no information about the "
+                   "lost term reaches the backward (docs/yastn_findings.md U4). AD runs must truncate with tol > 0.")
+def test_degenerate_zero_pair_is_undetectable():
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
+    with exact_svd_backward(), pytest.warns(DegenerateSVDWarning):
+        _small_pair_loss_backward(0.0)

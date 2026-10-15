@@ -23,6 +23,8 @@ import yastn.tn.fpeps as fpeps
 # DEGENERACY_WARN_FRACTION of the singular-vector gradient, svd_backward warns (false positives
 # possible for losses that depend on a degenerate pair only through its span, e.g. a projector). CTM tails
 # (sigma ~ 1e-20, gaps ~ 0) are flagged but carry no gradient: no warning at chi = 4-16.
+# Exactly zero kept singular values are undetectable (gU, gV vanish with sigma): AD runs must truncate
+# with opts_svd tol > 0.
 DEGENERACY_RTOL = 1e-10
 DEGENERACY_WARN_FRACTION = 1e-6
 
@@ -110,9 +112,13 @@ def svd_backward(ctx, gu, gsigma, gvh):
             weight = weight + vgv + vgv.transpose(-2, -1)
         # The lost term is ~ weight / sigma (gU, gV carry a factor sigma), so compare 1/sigma-scaled
         # weights; otherwise a degenerate pair of small singular values looks negligible.
+        # No floor: any floor below which 1/sigma is capped hides small degenerate pairs again.
+        # Gradient reaching a pair of exact zeros has no finite bound at all: infinite weight.
         sigma_pair = torch.maximum(sigma.unsqueeze(-2), sigma.unsqueeze(-1))
-        floor = torch.finfo(sigma.dtype).eps * sigma.max()
-        weight = (weight / sigma_pair.clamp_min(floor)).masked_fill(eye, 0)
+        zero_pair = sigma_pair == 0
+        weight = weight / torch.where(zero_pair, torch.ones_like(sigma_pair), sigma_pair)
+        weight = torch.where(zero_pair & (weight > 0), torch.full_like(weight, float("inf")), weight)
+        weight = weight.masked_fill(eye, 0)
         total = weight.sum()
         if total > 0 and weight[near_degenerate].sum() > DEGENERACY_WARN_FRACTION * total:
             warnings.warn(f"SVD backward: near-degenerate singular values (gap <= {DEGENERACY_RTOL:g} * sigma_max of the "
