@@ -157,3 +157,40 @@ def test_degenerate_zero_pair_is_undetectable():
     from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
     with exact_svd_backward(), pytest.warns(DegenerateSVDWarning):
         _small_pair_loss_backward(0.0)
+
+
+def _diag_svd_grad(diag, keep, tol, loss_of_R_P):
+    """Gradient of loss(R, P) for A = diag(...), R = U S V (truncated), P = U U^T; returns (grad, n_warn)."""
+    import torch
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    A = torch.diag(torch.tensor(diag, dtype=torch.float64)).requires_grad_()
+    with exact_svd_backward(), warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always", DegenerateSVDWarning)
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(val=A, Ds=tuple(A.shape))
+        U, S, V = yastn.linalg.svd_with_truncation(T, axes=(0, 1), D_total=keep, policy="fullrank", tol=tol)
+        u = U.to_dense()
+        loss_of_R_P(u @ S.to_dense() @ V.to_dense(), u @ u.T).backward()
+    return A.grad, sum(issubclass(x.category, DegenerateSVDWarning) for x in w)
+
+
+@pytest.mark.ad
+def test_degenerate_pair_warns_when_other_terms_dominate():
+    """Codex review of PR #4 (5th pass): a projector term on small singular values inflated the
+    denominator of the old fraction test, hiding the .7 pair (AD 0 vs true 1). Any gradient into a
+    degenerate pair must warn."""
+    _, n_warn = _diag_svd_grad([1, .7, .7, 2e-8, 1e-8, 1e-9], 5, 1e-10,
+                               lambda R, P: R[1, 2] + R[2, 1] + P[3, 4] + P[4, 3])
+    assert n_warn > 0
+
+
+@pytest.mark.ad
+def test_discarded_subnormal_gap_gives_no_nan():
+    """Codex review of PR #4 (5th pass): discarded pair (1e-300, 1e-300 - 1e-310) has a gap whose
+    reciprocal overflows; inf * 0 gave NaN in the whole gradient. Discarded columns carry no gradient."""
+    import torch
+    grad, n_warn = _diag_svd_grad([1, 1e-300, 1e-300 - 1e-310], 1, 0, lambda R, P: R[0, 0])
+    assert not torch.isnan(grad).any()
+    assert grad[0, 0].item() == pytest.approx(1.0)
+    assert n_warn == 0

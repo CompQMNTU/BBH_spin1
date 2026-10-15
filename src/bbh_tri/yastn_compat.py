@@ -16,25 +16,34 @@ import warnings
 
 import yastn.tn.fpeps as fpeps
 
-# Pairs with |sigma_i - sigma_j| <= DEGENERACY_RTOL * sigma_max are numerically degenerate. For a
-# gauge-invariant loss their 1/(sigma_i - sigma_j) term is 0/0 with a finite, nonzero limit that
-# roundoff destroys; neither zeroing nor broadening recovers it (kept pair at gap 0..1e-14: 1e-4 to
-# 80% gradient error; at 1e-12: up to 6e-4; at >= 1e-9: <= 1e-7). If such pairs carry more than
-# DEGENERACY_WARN_FRACTION of the singular-vector gradient, svd_backward warns (false positives
-# possible for losses that depend on a degenerate pair only through its span, e.g. a projector). CTM tails
-# (sigma ~ 1e-20, gaps ~ 0) are flagged but carry no gradient: no warning at chi = 4-16.
+# Pairs with |sigma_i - sigma_j| <= DEGENERACY_RTOL * sigma_max(block) are numerically degenerate.
+# For a gauge-invariant loss their 1/(sigma_i - sigma_j) term is 0/0 with a finite, nonzero limit
+# that roundoff destroys; neither zeroing nor broadening recovers it (kept pair at gap 0..1e-14:
+# 1e-4 to 80% gradient error; at 1e-12: up to 6e-4; at >= 1e-9: <= 1e-7). The same holds for 1/sigma
+# when sigma = 0 or 1/sigma overflows. svd_backward warns, conservatively, whenever ANY gradient
+# reaches a singular vector of such a pair or value. Fraction-based tests were defeated by
+# counterexamples (Codex reviews of PR #4), so there is no tolerance: discarded columns receive
+# exactly zero gradient and never trigger it (CTM tails at chi = 4-16: no warning). False positives:
+# losses that depend on a degenerate pair only through its span (e.g. a projector).
 # Exactly zero kept singular values are undetectable (gU, gV vanish with sigma): AD runs must truncate
 # with opts_svd tol > 0.
 DEGENERACY_RTOL = 1e-10
-DEGENERACY_WARN_FRACTION = 1e-6
 
 
 class DegenerateSVDWarning(RuntimeWarning):
     """Near-degenerate singular values contribute to an SVD gradient, which is then unreliable."""
 
 
-def _inverse(x, zero):
+def _unsafe(x):
+    """Entries whose reciprocal is undefined or overflows (x = 0 or |x| < 1/finfo.max)."""
     import torch
+    return x.abs() * torch.finfo(x.dtype).max < 1
+
+
+def _inverse(x, zero):
+    """1/x, with 0 where ``zero`` or where 1/x would overflow (avoids inf * 0 = nan downstream)."""
+    import torch
+    zero = zero | _unsafe(x)
     return torch.where(zero, torch.zeros_like(x), 1.0 / torch.where(zero, torch.ones_like(x), x))
 
 
@@ -98,31 +107,19 @@ def svd_backward(ctx, gu, gsigma, gvh):
     else:
         v_term = torch.zeros(m, n, dtype=u.dtype, device=u.device)
 
-    if near_degenerate.any():
-        # Within a numerically degenerate pair both the skew numerators and the gap vanish (0/0),
-        # and the skew parts can cancel exactly (e.g. a symmetric incoming gradient), so they cannot
-        # be used to detect the problem. Flag any gradient reaching the pair's singular vectors:
-        # off-diagonal entries of U^H gU and V^H gV, which do not cancel.
-        weight = torch.zeros_like(F)
-        if gu is not None:
-            ugu = (uh @ gu).abs()
-            weight = weight + ugu + ugu.transpose(-2, -1)
-        if gvh is not None:
-            vgv = (vh @ gv).abs()
-            weight = weight + vgv + vgv.transpose(-2, -1)
-        # The lost term is ~ weight / sigma (gU, gV carry a factor sigma), so compare 1/sigma-scaled
-        # weights; otherwise a degenerate pair of small singular values looks negligible.
-        # No floor: any floor below which 1/sigma is capped hides small degenerate pairs again.
-        # Gradient reaching a pair of exact zeros has no finite bound at all: infinite weight.
-        sigma_pair = torch.maximum(sigma.unsqueeze(-2), sigma.unsqueeze(-1))
-        zero_pair = sigma_pair == 0
-        weight = weight / torch.where(zero_pair, torch.ones_like(sigma_pair), sigma_pair)
-        weight = torch.where(zero_pair & (weight > 0), torch.full_like(weight, float("inf")), weight)
-        weight = weight.masked_fill(eye, 0)
-        total = weight.sum()
-        if total > 0 and weight[near_degenerate].sum() > DEGENERACY_WARN_FRACTION * total:
-            warnings.warn(f"SVD backward: near-degenerate singular values (gap <= {DEGENERACY_RTOL:g} * sigma_max of the "
-                          "block) carry gradient; the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
+    # Conservative check (see DEGENERACY_RTOL): any gradient into a singular vector whose pair is
+    # numerically degenerate, or whose sigma has no usable reciprocal, makes the result unreliable.
+    active = torch.zeros(k, dtype=torch.bool, device=sigma.device)
+    if gu is not None:
+        active = active | (gu != 0).any(dim=-2)
+    if gvh is not None:
+        active = active | (gvh != 0).any(dim=-1)
+    bad_pair = near_degenerate & (active.unsqueeze(-2) | active.unsqueeze(-1))
+    bad_sigma = _unsafe(sigma) & active
+    if bad_pair.any() or bad_sigma.any():
+        warnings.warn(f"SVD backward: gradient reaches singular vectors with near-degenerate (gap <= {DEGENERACY_RTOL:g}"
+                      " * sigma_max of the block), zero or underflowing singular values; the result is unreliable.",
+                      DegenerateSVDWarning, stacklevel=2)
 
     dA = u_term + sigma_term + v_term
     if u.is_complex() or v.is_complex():
