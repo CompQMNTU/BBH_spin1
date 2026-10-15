@@ -3,7 +3,7 @@
 yastn `1.6.2.dev320+g7ed8ad0e6`, built with
 `uv run --no-project --with "yastn @ git+https://github.com/yastn/yastn@7ed8ad0e6" --with numpy,scipy`.
 Line numbers refer to that version. Checked 2026-10-14; re-check if the pin in `pyproject.toml` changes.
-Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`). Run everything with `uv run pytest -m "slow or not slow"` (~25 s).
+Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`). Run everything with `uv run pytest -m "slow or not slow"` (~40 s).
 
 ## API (summary of SPEC §1)
 
@@ -51,24 +51,30 @@ Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2
 
 `measure_nsite_exact` runs on a 2×3 window at small D. Cost at the target D, χ is not yet measured.
 
-## U4 — `fp_ctmrg` on TriangularLattice (runs; gradient wrong)
+## U4 — `fp_ctmrg` on TriangularLattice (resolved with a patch)
 
-Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularLattice, dense, D=2 random tensors (normalized), loss = Σ_diag ⟨Sz Sz⟩ via `rdm2x2_anti_diagonal`, `fp_ctmrg` with `policy='fullrank'`, `corner_tol=1e-10`. Check: directional derivative along a random direction, AD vs central finite differences (FD stable to 1e-8 for ε = 1e-3…1e-5). One forward+backward ≈ 4–5 s.
+Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularLattice, dense, D=2 random tensors (normalized), loss = Σ_diag ⟨Sz Sz⟩ via `rdm2x2_anti_diagonal`, `fp_ctmrg` with `policy='fullrank'`, `corner_tol=1e-10`. Check: directional derivative along a random direction, AD vs central finite differences (FD stable to 1e-8 for ε = 1e-3…1e-5). One forward+backward ≈ 4–9 s.
 
-- **Runs:** forward converges, backward series converges (last `full grad diff` ≈ 1e-10), gradient finite. Returns only `env`.
-- **Gradient is wrong:**
+- **Runs:** forward converges, backward series converges, gradient finite. Returns only `env`.
+- **Bug (upstream):** `backend/linalg/torch_svd_gesdd.py:4`, `safe_inverse(x, eps_abs)` overwrites its argument with `eps_abs=1.0e-12` and returns x/(x²+1e-12). The scale-relative `scaled_eps = Smax²·ad_decomp_reg` computed in `SVDGESDD.backward` is never used. So 1/σ and 1/(σᵢ±σⱼ) are damped whenever σ or a gap is below ~1e-6 in **absolute** size. The CTM projector SVDs in the test have σ_max ≈ 7e-2, σ_min down to 1e-22 and exact-zero gaps.
+- **Not the cause:** truncation. A truncated `svd_with_truncation` with O(1), well-separated singular values matches FD to 1e-9 (the full SVD is computed first, so the discarded-subspace coupling is present). Not the fixed-point series (plain backprop through `ctmrg_` gives the same AD value), not the triangular geometry (`RectangularUnitcell` gives identical numbers).
+- **Evidence** (same state, directional derivative; FD = 0.141684 / 0.141671 / 0.141666 at χ = 4 / 8 / 16):
 
-  | χ | SVD tol | AD (`fp_ctmrg`) | AD (plain backprop through `ctmrg_`) | FD | rel. error |
-  |---|---|---|---|---|---|
-  | 4 | 1e-14 | 0.14004 | — | 0.14168 | 1.2e-2 |
-  | 8 | 1e-14 / 1e-8 | 0.144614 | 0.144614 | 0.141671 | 2.0e-2 |
-  | 16 | 1e-14 | 11.39 | — | 0.14166 | ≈1 |
-  | 16 | 1e-8 | 0.2348 | 1.9e5 | 0.14167 | 0.40 (fp) |
-  | 24 | 1e-8 | 0.2348 | — | 0.14167 | 0.40 (χ=24, tol 1e-14: CTM forward does not converge → `NoFixedPointError`) |
+  | χ | yastn as is | `safe_inverse` with the intended scaled ε | exact inverse (0 at 0) |
+  |---|---|---|---|
+  | 4 | 1.2e-2 | 1.9e-6 | 4.4e-8 |
+  | 8 | 2.0e-2 | 1.3e-6 | 7.2e-8 |
+  | 16 | 4.0e-1 | 9.5e-4 | 7.5e-8 |
 
-- **Localization:** at χ=8, plain backprop and `fp_ctmrg` agree to 9 digits but both miss FD by 2% → not the fixed-point series. `RectangularUnitcell(pattern=[[0,1,2],[2,0,1],[1,2,0]])` (same square network) gives identical numbers → not the triangular geometry. FD at χ=16 and 24 agree → the environment is saturated there, yet AD is worse.
-- **Likely cause (not proven):** the torch SVD backward (`backend/linalg/torch_svd_gesdd.py`, `SVDGESDD.backward`) is the full-SVD formula with a 1e-12 regularizer. Under truncation it omits the coupling to the discarded singular vectors (fits the 1–2% at χ = 4–8); with kept near-zero singular values it amplifies 1/σ terms (fits the blow-up at χ ≥ 16).
-- **Consequence:** the AD gradient gate (`docs/ad_workflow.md` §5) fails today. M4 must fix or work around this before any variational optimization. Candidate directions: a truncated-SVD backward with the discarded-subspace correction; choosing χ/tol so no near-zero singular values are kept; comparing with an eigendecomposition-based projector. Next diagnostic: check whether the error tracks the discarded weight at χ=4–8.
+  Isolated SVD (12×9, spectrum scale·0.5ᵏ, keep 6): exact at scale 1, wrong sign at scale 1e-5.
+- **Workaround:** `bbh_tri.yastn_compat.exact_svd_backward()` (context manager) / `patch_svd_backward()` replace `safe_inverse` by the exact inverse, returning 0 at exactly 0 (the diagonal of F and G is zeroed anyway). `backward()` must run inside the context. Risk: exactly degenerate *kept* singular values with a gauge-dependent loss; not seen so far. If it appears, use a scale-relative ε instead.
+- **Tests:** `test_fp_ctmrg_gradient_matches_finite_difference[8,16]` (patched, rel 1e-5), `test_fp_ctmrg_gradient_wrong_without_patch` and the two SVD canaries in `test_yastn_canaries.py` (pin the upstream bug).
+- Reported upstream: not yet.
+
+## Serialization
+
+- `TriangularLattice.to_dict()` (`_geometry.py:409`) stores only `pattern`; `Peps.from_dict` calls `TriangularLattice(**d['geometry'])`, which ignores it. A `full_patch=True` (9-site) state reloads as the 3-site √3×√3 cell, an OBC 2×3 state as infinite 3×3, silently. Workaround: `bbh_tri.yastn_compat.peps_to_dict(psi)` stores `dims`, `boundary`, `full_patch` instead; `Peps.from_dict` then rebuilds the right geometry (tested for default, full_patch and OBC). The default √3×√3 cell round-trips either way.
+- `TriangularLattice(full_patch=True).bonds()` (no direction) raises `TypeError` (tuple + list, `_geometry.py:407`). Iterate `bonds('h')`, `bonds('v')`, `bonds('d')` separately.
 
 ## Symmetric configs
 

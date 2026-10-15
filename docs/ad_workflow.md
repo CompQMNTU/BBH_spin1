@@ -83,12 +83,12 @@ The optimizer's energy is measured at χ_opt with `corner_tol`=1e-8. Never repor
    - the correlation length ξ (`transfer_matrix_spectrum`, numpy only).
 4. Accept the chain only if all of these hold:
    - |E(χ_max) − E(χ_max-1)| < 1e-5;
-   - E(χ_val) is not more than 1e-5 **below** E(χ_opt). A larger drop means the optimizer exploited a too-small environment (χ bias); rerun with larger χ_opt.
+   - |E(χ_val) − E(χ_opt)| < 1e-5. A large **rise** at χ_val means the optimizer exploited a too-small environment (χ bias: E(χ_opt) is artificially low); a large drop means χ_opt under-resolves the state. Either way, rerun with larger χ_opt.
    - CTM converged at every χ_val.
 
 ## 5. Gradient quality gate (before any production chain)
 
-**Status (M0, 2026-10-15): fails.** AD vs FD differ by ~2% at χ=8 and ~40% at χ≥16 at D=2. The error is in differentiating the CTM step, not in the fixed-point series (`docs/yastn_findings.md` U4). Resolve this first.
+**Status (2026-10-15): passes with the SVD patch.** With YASTN's own SVD backward, AD missed FD by 2% at χ=8 and 40% at χ=16 (absolute 1e-12 regularizer; `docs/yastn_findings.md` U4). Inside `bbh_tri.yastn_compat.exact_svd_backward()` the error is ~1e-7 at χ = 4–16 (D=2, Sz Sz loss; `tests/test_fp_ctmrg.py`). Every forward and backward pass of the optimizer must run inside that context. The checks below still apply to the production loss.
 
 - **Finite-difference check** at θ=π/4, D=2, χ=8, √3×√3, dense float64:
   - Use a random direction v and compare (E(x+εv) − E(x−εv))/2ε with ∇E·v for ε ∈ {1e-3, 1e-4, 1e-5}.
@@ -125,8 +125,9 @@ Near a possibly continuous transition (§8 of SPEC; 120°→AFQ with J₂): cros
 ## 8. Checkpointing and resume
 
 Save the following every step, atomically (write to a temp file, then rename):
-- `psi.to_dict()`;
-- the optimizer state;
+- the raw (unnormalized) leaf tensors that the optimizer updates. The loss normalizes them (§3), so their norms drift, and the normalized `psi` alone cannot restore the optimizer's coordinates;
+- `bbh_tri.yastn_compat.peps_to_dict(psi)` (not `psi.to_dict()`, which loses non-default TriangularLattice geometry);
+- the optimizer state (L-BFGS history refers to the raw leaf tensors);
 - the last converged env (`env.to_dict()`);
 - the RNG state;
 - the step log;

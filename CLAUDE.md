@@ -7,3 +7,4 @@ yastn is pinned to a git commit in pyproject.toml; M0 findings refer to that com
 Never hard-code physics numbers in src/; reference values live in tests/ with a citation comment.
 When YASTN behavior is uncertain, write a minimal test and record the result in docs/yastn_findings.md.
 YASTN pitfalls (docs/yastn_findings.md): never pass TriangularLattice to gates.distribute or call all-bond defaults (measure_nn(), truncate_(bond=None)); route diagonal/NNN gates along explicit NN paths; measure the diagonal with measure_2x2 / measure_nsite_exact.
+AD: run every forward+backward inside bbh_tri.yastn_compat.exact_svd_backward() (yastn's SVD backward has an absolute 1e-12 regularizer). Save PEPS with bbh_tri.yastn_compat.peps_to_dict (psi.to_dict loses non-default TriangularLattice geometry).

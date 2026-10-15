@@ -41,7 +41,7 @@ Details, line references and the test scripts' results: `docs/yastn_findings.md`
 | — rdm helpers | `envs/rdm.py`: `measure_rdm_nn`, `measure_rdm_diag`, `measure_rdm_2x2` **crash on dense configs** (`IndexError` from `O0.n[0]`); calling `rdm1x2`, `rdm2x1`, `rdm2x2_anti_diagonal` directly works | ❌ wrappers / ✅ low-level |
 | AD / variational | `yastn.tn.fpeps.envs.fixed_pt.fp_ctmrg` (torch backend, implicit differentiation, gauge fixing, `NoFixedPointError`). Returns **only `env`** (docstring says a tuple); module imports torch at top level | ✅ (code read; not run) |
 | Custom symmetry | no built-in Z2xZ2; a `sym_abelian` subclass passed as `make_config(sym=cls)` works (SVD tested). `Z2xU1` exists as a class but is not accepted as a string | ✅ |
-| Save / load | `to_dict` / `from_dict` round-trip a TriangularLattice PEPS (`save_to_dict` deprecated) | ✅ |
+| Save / load | `to_dict` / `from_dict` round-trip the default √3×√3 TriangularLattice PEPS (`save_to_dict` deprecated). **Non-default cells (`full_patch`, OBC, other `dims`) silently reload with the default geometry**; save with `bbh_tri.yastn_compat.peps_to_dict` | ⚠️ workaround |
 
 **Defaults that iterate over all bonds break on TriangularLattice** (they hit the diagonal and raise `YastnError: Site(1, 0), Site(0, 1) are not nearest-neighbor sites.`): `measure_nn()`, `EnvBP.measure_nn()`, `truncate_(bond=None)`, `Peps.get_bond_dimensions()`, `gates.distribute`. Always pass explicit h/v bonds.
 
@@ -49,7 +49,7 @@ Details, line references and the test scripts' results: `docs/yastn_findings.md`
 - **U1 — resolved.** A bare 2-site diagonal gate raises the error above (EnvBP and EnvNTU). A 2-site gate given with `sites` = an NN path matched exact ED (overlap 1 to 1e-15) on a 2×3 OBC entangled state for both 3-site diagonal paths, the (1,1) path and all three 4-site knight paths, with EnvBP/EnvNTU in `mpo` and `nn` modes; wrong placements give overlap 0.86–0.91. `evolution_step_` truncates **every** bond along the path. Keep `test_routing.py` as a regression test.
 - **U2 — resolved.** Diagonal bonds: use `measure_2x2`, `measure_nsite_exact`, or a direct `rdm2x2_anti_diagonal` contraction (all three agree to ~1e-15). Not `measure_nn`, `measure_rdm_diag` (dense crash), or `measure_line`.
 - **U3 — partly.** `measure_nsite_exact` runs on a 2×3 window at small D. Memory/time at the target D, χ is still open; profile before M5.
-- **U4 — runs, gradient wrong.** `fp_ctmrg` works on `TriangularLattice` (same numbers as the equivalent `RectangularUnitcell`), but its gradient misses finite differences by ~2% at χ=8 and ~40% at χ≥16. Plain backprop through `ctmrg_` gives the same AD value, so the error is in differentiating the CTM step (likely the SVD backward under truncation / near-zero singular values). **Blocks M4** until fixed; see `docs/yastn_findings.md` U4 and the xfail test in `tests/test_fp_ctmrg.py`.
+- **U4 — resolved with a patch.** `fp_ctmrg` works on `TriangularLattice`. YASTN's SVD backward regularizes 1/σ and 1/(σᵢ±σⱼ) with an absolute 1e-12 (`safe_inverse` ignores its scaled ε), which corrupts gradients once CTM singular values or gaps fall below ~1e-6: 2% error at χ=8, 40% at χ=16. With `bbh_tri.yastn_compat.exact_svd_backward()` AD matches finite differences to ~1e-7 at χ = 4–16. All AD code must run forward and backward inside it. See `docs/yastn_findings.md` U4.
 
 Record findings in `docs/yastn_findings.md`.
 
