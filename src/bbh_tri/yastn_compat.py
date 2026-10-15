@@ -20,7 +20,8 @@ import yastn.tn.fpeps as fpeps
 # gauge-invariant loss their 1/(sigma_i - sigma_j) term is 0/0 with a finite, nonzero limit that
 # roundoff destroys; neither zeroing nor broadening recovers it (kept pair at gap 0..1e-14: 1e-4 to
 # 80% gradient error; at 1e-12: up to 6e-4; at >= 1e-9: <= 1e-7). If such pairs carry more than
-# DEGENERACY_WARN_FRACTION of the singular-vector gradient, svd_backward warns. CTM tails
+# DEGENERACY_WARN_FRACTION of the singular-vector gradient, svd_backward warns (false positives
+# possible for losses that depend on a degenerate pair only through its span, e.g. a projector). CTM tails
 # (sigma ~ 1e-20, gaps ~ 0) are flagged but carry no gradient: no warning at chi = 4-16.
 DEGENERACY_RTOL = 1e-10
 DEGENERACY_WARN_FRACTION = 1e-6
@@ -38,11 +39,13 @@ def _inverse(x, zero):
 def svd_backward(ctx, gu, gsigma, gvh):
     """Drop-in for ``SVDGESDD.backward`` (same structure, regularization replaced).
 
-    ``ctx.saved_tensors`` = (u, sigma, vh, eps, sigma_max) as set by yastn's ``kernel_svd.backward``;
-    ``eps`` (yastn's ad_decomp_reg) is ignored.
+    ``ctx.saved_tensors`` = (u, sigma, vh, eps, sigma_max_all_blocks) as set by yastn's
+    ``kernel_svd.backward``; both ``eps`` (yastn's ad_decomp_reg) and the all-block maximum are
+    ignored: degeneracy is judged against this block's own largest singular value, since each
+    block's SVD roundoff is relative to that block.
     """
     import torch
-    u, sigma, vh, _, sigma_max = ctx.saved_tensors
+    u, sigma, vh = ctx.saved_tensors[:3]
     m, n, k = u.size(0), vh.size(1), sigma.size(0)
     if u.size(-2) != u.size(-1) or vh.size(-2) != vh.size(-1):
         u = u.narrow(-1, 0, k)
@@ -63,7 +66,7 @@ def svd_backward(ctx, gu, gsigma, gvh):
     sigma_inv = _inverse(sigma, sigma == 0)
     diff = sigma.unsqueeze(-2) - sigma.unsqueeze(-1)
     F = _inverse(diff, eye | (diff == 0))
-    near_degenerate = ~eye & (diff.abs() <= DEGENERACY_RTOL * sigma_max)
+    near_degenerate = ~eye & (diff.abs() <= DEGENERACY_RTOL * sigma.max())
     tot = sigma.unsqueeze(-2) + sigma.unsqueeze(-1)
     G = _inverse(tot, eye | (tot == 0))
 
@@ -94,14 +97,22 @@ def svd_backward(ctx, gu, gsigma, gvh):
         v_term = torch.zeros(m, n, dtype=u.dtype, device=u.device)
 
     if near_degenerate.any():
-        # The F-term numerator of a degenerate pair can cancel to exactly 0 by roundoff while the
-        # true 0/0 limit is finite, so it cannot be measured. Instead flag any gradient flowing into
-        # the singular vectors of a numerically degenerate pair.
-        weight = (skew_u.abs() if gu is not None else 0) + (skew_v.abs() if gvh is not None else 0)
+        # Within a numerically degenerate pair both the skew numerators and the gap vanish (0/0),
+        # and the skew parts can cancel exactly (e.g. a symmetric incoming gradient), so they cannot
+        # be used to detect the problem. Flag any gradient reaching the pair's singular vectors:
+        # off-diagonal entries of U^H gU and V^H gV, which do not cancel.
+        weight = torch.zeros_like(F)
+        if gu is not None:
+            ugu = (uh @ gu).abs()
+            weight = weight + ugu + ugu.transpose(-2, -1)
+        if gvh is not None:
+            vgv = (vh @ gv).abs()
+            weight = weight + vgv + vgv.transpose(-2, -1)
+        weight = weight.masked_fill(eye, 0)
         total = weight.sum()
         if total > 0 and weight[near_degenerate].sum() > DEGENERACY_WARN_FRACTION * total:
-            warnings.warn(f"SVD backward: near-degenerate singular values (gap <= {DEGENERACY_RTOL:g} * sigma_max) "
-                          "carry gradient; the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
+            warnings.warn(f"SVD backward: near-degenerate singular values (gap <= {DEGENERACY_RTOL:g} * sigma_max of the "
+                          "block) carry gradient; the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
 
     dA = u_term + sigma_term + v_term
     if u.is_complex() or v.is_complex():

@@ -65,3 +65,62 @@ def test_peps_to_dict_keeps_geometry(ops, kw, n_sites):
     assert list(g.sites()) == list(geo.sites())
     assert all(list(g.bonds(d)) == list(geo.bonds(d)) for d in "hvd")
     assert all(np.allclose(psi2[s].to_numpy(), psi[s].to_numpy()) for s in geo.sites())
+
+
+@pytest.mark.ad
+def test_degenerate_pair_with_symmetric_gradient_warns():
+    """Codex review of PR #4: A = diag(1, .7, .7, .3), keep 3, L = R[1,2] + R[2,1] of the truncated
+    reconstruction R. Both skew numerators vanish, the backward returns 0 (FD: 2); it must warn."""
+    import torch
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+
+    def loss(A):
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(val=A, Ds=(4, 4))
+        U, S, V = yastn.linalg.svd_with_truncation(T, axes=(0, 1), D_total=3, policy="fullrank", tol=0)
+        R = U.to_dense() @ S.to_dense() @ V.to_dense()
+        return R[1, 2] + R[2, 1]
+
+    A = torch.diag(torch.tensor([1.0, 0.7, 0.7, 0.3], dtype=torch.float64)).requires_grad_()
+    with exact_svd_backward(), pytest.warns(DegenerateSVDWarning):
+        loss(A).backward()
+
+
+@pytest.mark.ad
+def test_degeneracy_threshold_is_block_local():
+    """Codex review of PR #4: a U1 block with spectrum (2e-12, 1e-12) next to a norm-1 block is
+    well resolved (relative gap 1/2); its gradient is accurate and must not warn."""
+    import torch
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
+    cfg = yastn.make_config(backend="torch", default_dtype="float64", sym="U1")
+    g = torch.Generator().manual_seed(0)
+
+    def block(spectrum):
+        n = len(spectrum)
+        Q1, _ = torch.linalg.qr(torch.randn(n, n, generator=g, dtype=torch.float64))
+        Q2, _ = torch.linalg.qr(torch.randn(n, n, generator=g, dtype=torch.float64))
+        return Q1 @ torch.diag(torch.tensor(spectrum, dtype=torch.float64)) @ Q2.T
+
+    B0, B1 = block([1.0, 0.5, 0.2]), block([2e-12, 1e-12])
+    X = torch.randn(2, 2, generator=g, dtype=torch.float64)
+    W = torch.randn(2, 2, generator=g, dtype=torch.float64)
+    d = torch.randn(2, 2, generator=g, dtype=torch.float64)
+
+    def loss(b1):
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(ts=(0, 0), val=B0, Ds=(3, 3))
+        T.set_block(ts=(1, 1), val=b1, Ds=(2, 2))
+        U, S, V = yastn.linalg.svd(T, axes=(0, 1))
+        u1 = U.to_dense()[3:, 3:4]  # leading singular vector of the small block (dense order: charge 0, then 1)
+        r1 = (U @ S @ V).to_dense()[3:, 3:]
+        return (r1 * X).sum() / 1e-12 + (W @ u1 @ u1.T).trace()
+
+    b1 = B1.clone().requires_grad_()
+    with exact_svd_backward(), warnings.catch_warnings():
+        warnings.simplefilter("error", DegenerateSVDWarning)
+        loss(b1).backward()
+    eps = 1e-6 * 1e-12
+    with torch.no_grad():
+        fd = (loss(B1 + eps * d) - loss(B1 - eps * d)).item() / (2 * eps)
+    assert (b1.grad * d).sum().item() == pytest.approx(fd, rel=1e-6)
