@@ -88,7 +88,7 @@ The optimizer's energy is measured at χ_opt with `corner_tol`=1e-8. Never repor
 
 ## 5. Gradient quality gate (before any production chain)
 
-**Status (2026-10-15): passes with the SVD patch.** With YASTN's own SVD backward, AD missed FD by 2% at χ=8 and 40% at χ=16 (absolute 1e-12 regularizer; `docs/yastn_findings.md` U4). Inside `bbh_tri.yastn_compat.exact_svd_backward()` the error is ~1e-7 at χ = 4–16 (D=2, Sz Sz loss; `tests/test_fp_ctmrg.py`). Every forward and backward pass of the optimizer must run inside that context. The checks below still apply to the production loss.
+**Status (2026-10-15): passes with the SVD patch.** With YASTN's own SVD backward, AD missed FD by 2% at χ=8 and 40% at χ=16 (absolute 1e-12 regularizer; `docs/yastn_findings.md` U4). Inside `bbh_tri.yastn_compat.exact_svd_backward()` the error is ~1e-7 at χ = 4–16 (D=2, Sz Sz loss; `tests/test_fp_ctmrg.py`). Every forward and backward pass of the optimizer must run inside that context, with `DegenerateSVDWarning` turned into an error (`warnings.simplefilter('error', DegenerateSVDWarning)`); on that error, treat the step like a `NoFixedPointError` (§6 failure handling) or switch to symmetric tensors. The checks below still apply to the production loss.
 
 - **Finite-difference check** at θ=π/4, D=2, χ=8, √3×√3, dense float64:
   - Use a random direction v and compare (E(x+εv) − E(x−εv))/2ε with ∇E·v for ε ∈ {1e-3, 1e-4, 1e-5}.

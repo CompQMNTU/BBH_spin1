@@ -84,3 +84,37 @@ def converged_ctm(psi, chi, max_sweeps=200, corner_tol=1e-11):
     env.iterate_(opts_svd={"D_total": chi}, moves="hv", method="2x2",
                  max_sweeps=max_sweeps, corner_tol=corner_tol)
     return env
+
+
+def svd_directional_derivative(spectrum, keep, m=12, seed=0):
+    """(AD, central FD) directional derivative of a gauge-invariant loss of a truncated yastn SVD.
+
+    The matrix is m x len(spectrum) with the given singular values; the loss depends on the kept
+    U (projector) and on the kept U S V (reconstruction), both invariant under SVD gauge changes.
+    """
+    import torch
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    g = torch.Generator().manual_seed(seed)
+    s = torch.as_tensor(spectrum, dtype=torch.float64)
+    n = s.numel()
+    Ur, _ = torch.linalg.qr(torch.randn(m, m, generator=g, dtype=torch.float64))
+    Vr, _ = torch.linalg.qr(torch.randn(n, n, generator=g, dtype=torch.float64))
+    A0 = Ur[:, :n] @ torch.diag(s) @ Vr.T
+    W = torch.randn(m, m, generator=g, dtype=torch.float64)
+    X = torch.randn(m, n, generator=g, dtype=torch.float64)
+    dA = torch.randn(m, n, generator=g, dtype=torch.float64)
+    scale = s.max()
+
+    def loss(A):
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(val=A, Ds=(m, n))
+        U, S, V = yastn.linalg.svd_with_truncation(T, axes=(0, 1), D_total=keep, policy="fullrank", tol=0)
+        u, sv, v = U.to_dense(), S.to_dense(), V.to_dense()
+        return (W @ u @ u.T).trace() + ((u @ sv @ v) * X).sum() / scale
+
+    A = A0.clone().requires_grad_()
+    loss(A).backward()
+    eps = 1e-7 * scale
+    with torch.no_grad():
+        fd = (loss(A0 + eps * dA) - loss(A0 - eps * dA)).item() / (2 * eps)
+    return (A.grad * dA).sum().item(), fd

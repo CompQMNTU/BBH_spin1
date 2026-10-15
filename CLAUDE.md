@@ -25,7 +25,7 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 - `SPEC.md`: goals, conventions (§2), reference numbers (§3), algorithms (§4), target package layout (§5), milestones (§6), pitfalls (§8).
 - `docs/yastn_findings.md`: verified YASTN behavior and bugs at the pinned commit. `docs/ad_workflow.md`: design of the AD/fp_ctmrg ground-state workflow.
 - `src/bbh_tri/`: the package. So far only `yastn_compat.py` (workarounds for YASTN bugs). Modules listed in SPEC §5 are added milestone by milestone.
-- `tests/`: `test_routing.py` (U1), `test_measure.py` (U2), `test_fp_ctmrg.py` (U4), `test_yastn_canaries.py` (pins current upstream behavior, including bugs), `yastn_utils.py` (test-only helpers).
+- `tests/`: `test_routing.py` (U1), `test_measure.py` (U2), `test_fp_ctmrg.py` (U4), `test_yastn_canaries.py` (pins current upstream behavior, including bugs), `test_yastn_compat.py` (our workarounds), `yastn_utils.py` (test-only helpers).
 
 ## Working rules
 
@@ -40,8 +40,8 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 
 - Never pass `TriangularLattice` to `gates.distribute` or call all-bond defaults: `measure_nn()`, `truncate_(bond=None)`, `get_bond_dimensions()`, and `bonds()` without a direction (raises on `full_patch`). Iterate `bonds('h')`, `bonds('v')`, `bonds('d')` explicitly.
 - Diagonal and NNN gates must be routed along explicit square-NN paths (`gate._replace(sites=path)`); every bond on the path is truncated. `distribute(symmetrize=True)` does not mirror custom gates: use τ/2 and append the reversed list yourself.
-- Measure the diagonal bond with `measure_2x2`, `measure_nsite_exact` or `rdm2x2_anti_diagonal`. `measure_rdm_nn/diag/2x2` crash on dense configs; `TriangularLattice(boundary='obc').bonds('d')` contains `None`.
-- **AD:** run every forward and backward pass inside `bbh_tri.yastn_compat.exact_svd_backward()`. yastn's SVD backward regularizes with an absolute 1e-12 and gives wrong gradients otherwise. `fp_ctmrg` returns only `env`.
+- Measure the diagonal bond with `measure_2x2`, `measure_nsite_exact` or `rdm2x2_anti_diagonal`. `measure_rdm_nn/diag/2x2` crash on dense configs; Finite OBC patches need `TriangularLattice(dims=..., boundary='obc', full_patch=True)` (without `full_patch`, `dims` is ignored), and their `bonds('d')` contains `None`.
+- **AD:** run every forward and backward pass inside `bbh_tri.yastn_compat.exact_svd_backward()`. yastn's SVD backward regularizes with an absolute 1e-12 and gives wrong gradients otherwise. Treat `DegenerateSVDWarning` as an error: degenerate singular values make the gradient unreliable. `fp_ctmrg` returns only `env`.
 - **Saving:** use `bbh_tri.yastn_compat.peps_to_dict(psi)`. `psi.to_dict()` drops `dims/boundary/full_patch`, so non-default cells reload with the wrong geometry.
 - NTU is slow (D=3 NTU didn't finish 100 steps in 8 min); EnvBP is the practical default at small D. Seed with `ops.random_seed(seed=...)`.
 

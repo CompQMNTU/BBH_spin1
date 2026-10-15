@@ -3,7 +3,7 @@
 yastn `1.6.2.dev320+g7ed8ad0e6`, built with
 `uv run --no-project --with "yastn @ git+https://github.com/yastn/yastn@7ed8ad0e6" --with numpy,scipy`.
 Line numbers refer to that version. Checked 2026-10-14; re-check if the pin in `pyproject.toml` changes.
-Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`). Run everything with `uv run pytest -m "slow or not slow"` (~40 s).
+Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`), `tests/test_yastn_compat.py` (our workarounds). Run everything with `uv run pytest -m "slow or not slow"` (~40 s).
 
 ## API (summary of SPEC §1)
 
@@ -67,13 +67,23 @@ Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularL
   | 16 | 4.0e-1 | 9.5e-4 | 7.5e-8 |
 
   Isolated SVD (12×9, spectrum scale·0.5ᵏ, keep 6): exact at scale 1, wrong sign at scale 1e-5.
-- **Workaround:** `bbh_tri.yastn_compat.exact_svd_backward()` (context manager) / `patch_svd_backward()` replace `safe_inverse` by the exact inverse, returning 0 at exactly 0 (the diagonal of F and G is zeroed anyway). `backward()` must run inside the context. Risk: exactly degenerate *kept* singular values with a gauge-dependent loss; not seen so far. If it appears, use a scale-relative ε instead.
-- **Tests:** `test_fp_ctmrg_gradient_matches_finite_difference[8,16]` (patched, rel 1e-5), `test_fp_ctmrg_gradient_wrong_without_patch` and the two SVD canaries in `test_yastn_canaries.py` (pin the upstream bug).
+- **Workaround:** `bbh_tri.yastn_compat.exact_svd_backward()` (context manager) / `patch_svd_backward()` replace `SVDGESDD.backward` by `svd_backward`: same formula, exact 1/σ, 1/(σᵢ+σⱼ), 1/(σᵢ−σⱼ), each 0 only at exactly 0. `backward()` must run inside the context.
+- **Degenerate singular values (Codex review of PR #4).** For a kept pair with |σᵢ−σⱼ| at roundoff level, the 1/(σᵢ−σⱼ) term of a gauge-invariant loss is 0/0 with a finite, nonzero limit. Roundoff destroys it, and no formula that sees only the incoming gradients recovers it. Measured on a 8×6 matrix, kept pair at 0.7, 6 seeds:
+
+  | gap | exact inverse (this patch) | gaps set to 0 below 1e-12·σ_max |
+  |---|---|---|
+  | 0, 2⁻⁵² | 1e-2 … 8e-1 | 1.6e-1 |
+  | 1e-14 | 1e-4 … 1e-2 | 8e-2 |
+  | 1e-12 | 1e-6 … 6e-4 | 8e-2 |
+  | ≥ 1e-9 | ≤ 1e-7 | ≤ 1e-7 |
+
+  So `svd_backward` keeps the exact inverse and raises `DegenerateSVDWarning` whenever singular vectors of a pair with gap ≤ 1e-10·σ_max carry more than 1e-6 of the singular-vector gradient. (The F-term numerator itself can cancel to exactly 0, so it cannot be used as the test.) It warned in every case above with error ≥ 1e-5. CTM tails (σ ≈ 1e-20, zero gaps) carry no gradient: no warning at χ = 4–16. Expect warnings with symmetric states (U1, Z₂×Z₂) or lattice symmetries that force degenerate corner spectra. Then the gradient is unreliable: use symmetric tensors (blocks separate the degeneracy) or check against FD.
+- **Tests:** `test_fp_ctmrg_gradient_matches_finite_difference[8,16]` (patched, rel 1e-5, `DegenerateSVDWarning` is an error), `test_fp_ctmrg_gradient_wrong_without_patch` and the SVD canary in `test_yastn_canaries.py` (pin the upstream bug), `tests/test_yastn_compat.py` (small σ, resolved and degenerate pairs).
 - Reported upstream: not yet.
 
 ## Serialization
 
-- `TriangularLattice.to_dict()` (`_geometry.py:409`) stores only `pattern`; `Peps.from_dict` calls `TriangularLattice(**d['geometry'])`, which ignores it. A `full_patch=True` (9-site) state reloads as the 3-site √3×√3 cell, an OBC 2×3 state as infinite 3×3, silently. Workaround: `bbh_tri.yastn_compat.peps_to_dict(psi)` stores `dims`, `boundary`, `full_patch` instead; `Peps.from_dict` then rebuilds the right geometry (tested for default, full_patch and OBC). The default √3×√3 cell round-trips either way.
+- `TriangularLattice.to_dict()` (`_geometry.py:409`) stores only `pattern`; `Peps.from_dict` calls `TriangularLattice(**d['geometry'])`, which ignores it. A `full_patch=True` (9-site) state reloads as the 3-site √3×√3 cell, an OBC 2×3 `full_patch=True` state (6 sites) as infinite 3×3, silently. (OBC needs `full_patch=True` anyway; without it `dims` is ignored, see the API table.) Workaround: `bbh_tri.yastn_compat.peps_to_dict(psi)` stores `dims`, `boundary`, `full_patch` instead; `Peps.from_dict` then rebuilds the right geometry (tested for default, full_patch and OBC). The default √3×√3 cell round-trips either way.
 - `TriangularLattice(full_patch=True).bonds()` (no direction) raises `TypeError` (tuple + list, `_geometry.py:407`). Iterate `bonds('h')`, `bonds('v')`, `bonds('d')` separately.
 
 ## Symmetric configs

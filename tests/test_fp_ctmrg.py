@@ -3,7 +3,8 @@
 Finding (docs/yastn_findings.md, U4): fp_ctmrg runs on TriangularLattice. With yastn's own SVD
 backward its gradient misses finite differences (~2% at chi=8, ~40% at chi=16), because
 `safe_inverse` regularizes 1/x with an absolute 1e-12 while CTM singular values and gaps go far
-below 1e-6. With bbh_tri.yastn_compat.exact_svd_backward the gradient matches FD to ~1e-7.
+below 1e-6. With bbh_tri.yastn_compat.exact_svd_backward the gradient matches FD to ~1e-7, and no
+near-degenerate singular values carry gradient (DegenerateSVDWarning is an error here).
 """
 
 import numpy as np
@@ -77,6 +78,7 @@ def directional_derivatives(chi, eps=1e-4):
 
 
 @pytest.mark.slow
+@pytest.mark.filterwarnings("error::bbh_tri.yastn_compat.DegenerateSVDWarning")
 @pytest.mark.parametrize("chi", [8, 16])
 def test_fp_ctmrg_gradient_matches_finite_difference(chi):
     with exact_svd_backward():
