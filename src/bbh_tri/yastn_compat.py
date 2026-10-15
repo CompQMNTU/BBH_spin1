@@ -73,13 +73,28 @@ def svd_backward(ctx, gu, gsigma, gvh):
     if gu is None and gvh is None:
         return sigma_term, None, None, None
 
+    # Singular vectors that receive gradient. Pairs with no gradient on either vector contribute
+    # exactly 0; their factors are zeroed up front so huge-but-finite F, G cannot overflow in F +- G
+    # and give inf * 0 = nan.
+    active = torch.zeros(k, dtype=torch.bool, device=sigma.device)
+    if gu is not None:
+        active = active | (gu != 0).any(dim=-2)
+    if gvh is not None:
+        active = active | (gvh != 0).any(dim=-1)
     eye = torch.eye(k, dtype=torch.bool, device=sigma.device)
-    sigma_inv = _inverse(sigma, sigma == 0)
+    pair_active = ~eye & (active.unsqueeze(-2) | active.unsqueeze(-1))
+
+    sigma_inv = _inverse(sigma, ~active)
     diff = sigma.unsqueeze(-2) - sigma.unsqueeze(-1)
-    F = _inverse(diff, eye | (diff == 0))
-    near_degenerate = ~eye & (diff.abs() <= DEGENERACY_RTOL * sigma.max())
     tot = sigma.unsqueeze(-2) + sigma.unsqueeze(-1)
-    G = _inverse(tot, eye | (tot == 0))
+    F = _inverse(diff, ~pair_active | (diff == 0))
+    G = _inverse(tot, ~pair_active | (tot == 0))
+
+    # Conservative check (see DEGENERACY_RTOL): any gradient into a singular vector whose pair is
+    # numerically degenerate, or whose sigma, gap or sum has no usable reciprocal, makes the result
+    # unreliable.
+    near_degenerate = diff.abs() <= DEGENERACY_RTOL * sigma.max()
+    bad = (pair_active & (near_degenerate | _unsafe(diff) | _unsafe(tot))).any() or (_unsafe(sigma) & active).any()
 
     uh = u.conj().transpose(-2, -1)
     if gu is not None:
@@ -107,26 +122,16 @@ def svd_backward(ctx, gu, gsigma, gvh):
     else:
         v_term = torch.zeros(m, n, dtype=u.dtype, device=u.device)
 
-    # Conservative check (see DEGENERACY_RTOL): any gradient into a singular vector whose pair is
-    # numerically degenerate, or whose sigma has no usable reciprocal, makes the result unreliable.
-    active = torch.zeros(k, dtype=torch.bool, device=sigma.device)
-    if gu is not None:
-        active = active | (gu != 0).any(dim=-2)
-    if gvh is not None:
-        active = active | (gvh != 0).any(dim=-1)
-    bad_pair = near_degenerate & (active.unsqueeze(-2) | active.unsqueeze(-1))
-    bad_sigma = _unsafe(sigma) & active
-    if bad_pair.any() or bad_sigma.any():
-        warnings.warn(f"SVD backward: gradient reaches singular vectors with near-degenerate (gap <= {DEGENERACY_RTOL:g}"
-                      " * sigma_max of the block), zero or underflowing singular values; the result is unreliable.",
-                      DegenerateSVDWarning, stacklevel=2)
-
     dA = u_term + sigma_term + v_term
     if u.is_complex() or v.is_complex():
         L = (uh @ gu).diagonal(0, -2, -1)
         L.real.zero_()
         L.imag.mul_(sigma_inv)
         dA = dA + (u * L.unsqueeze(-2)) @ vh
+    if bad or not torch.isfinite(dA).all():
+        warnings.warn(f"SVD backward: gradient reaches singular vectors with near-degenerate (gap <= {DEGENERACY_RTOL:g}"
+                      " * sigma_max of the block), zero or underflowing singular values, or the result is not finite;"
+                      " the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
     return dA, None, None, None
 
 

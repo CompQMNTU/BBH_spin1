@@ -186,11 +186,21 @@ def test_degenerate_pair_warns_when_other_terms_dominate():
 
 
 @pytest.mark.ad
-def test_discarded_subnormal_gap_gives_no_nan():
-    """Codex review of PR #4 (5th pass): discarded pair (1e-300, 1e-300 - 1e-310) has a gap whose
-    reciprocal overflows; inf * 0 gave NaN in the whole gradient. Discarded columns carry no gradient."""
+@pytest.mark.parametrize("tail", [[1e-300, 1e-300 - 1e-310], [1.2e-308, 6e-309]])
+def test_discarded_subnormal_gap_gives_no_nan(tail):
+    """Codex review of PR #4 (5th, 6th pass): a discarded pair whose 1/gap overflows (1e-300 tail),
+    or whose finite F, G overflow in F + G (1e-308 tail), gave inf * 0 = NaN in the whole gradient.
+    Discarded columns carry no gradient and must contribute exactly 0."""
     import torch
-    grad, n_warn = _diag_svd_grad([1, 1e-300, 1e-300 - 1e-310], 1, 0, lambda R, P: R[0, 0])
+    grad, n_warn = _diag_svd_grad([1, *tail], 1, 0, lambda R, P: R[0, 0])
     assert not torch.isnan(grad).any()
     assert grad[0, 0].item() == pytest.approx(1.0)
     assert n_warn == 0
+
+
+@pytest.mark.ad
+def test_active_pair_with_overflowing_gap_warns():
+    """Codex review of PR #4 (6th pass): diag(1e-307, 9.9e-308) is well resolved (relative gap 1e-2)
+    but 1/gap overflows and would be dropped silently (AD 0 vs true 1 for L = R01 + R10)."""
+    _, n_warn = _diag_svd_grad([1e-307, 9.9e-308], 2, 0, lambda R, P: R[0, 1] + R[1, 0])
+    assert n_warn > 0
