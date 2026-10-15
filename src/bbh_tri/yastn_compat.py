@@ -108,7 +108,11 @@ def svd_backward(ctx, gu, gsigma, gvh):
         if gvh is not None:
             vgv = (vh @ gv).abs()
             weight = weight + vgv + vgv.transpose(-2, -1)
-        weight = weight.masked_fill(eye, 0)
+        # The lost term is ~ weight / sigma (gU, gV carry a factor sigma), so compare 1/sigma-scaled
+        # weights; otherwise a degenerate pair of small singular values looks negligible.
+        sigma_pair = torch.maximum(sigma.unsqueeze(-2), sigma.unsqueeze(-1))
+        floor = torch.finfo(sigma.dtype).eps * sigma.max()
+        weight = (weight / sigma_pair.clamp_min(floor)).masked_fill(eye, 0)
         total = weight.sum()
         if total > 0 and weight[near_degenerate].sum() > DEGENERACY_WARN_FRACTION * total:
             warnings.warn(f"SVD backward: near-degenerate singular values (gap <= {DEGENERACY_RTOL:g} * sigma_max of the "

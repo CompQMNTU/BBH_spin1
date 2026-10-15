@@ -124,3 +124,24 @@ def test_degeneracy_threshold_is_block_local():
     with torch.no_grad():
         fd = (loss(B1 + eps * d) - loss(B1 - eps * d)).item() / (2 * eps)
     assert (b1.grad * d).sum().item() == pytest.approx(fd, rel=1e-6)
+
+
+@pytest.mark.ad
+def test_degenerate_small_pair_warns_despite_small_raw_weight():
+    """Codex review of PR #4 (3rd pass): A = diag(1, .7, 1e-8, 1e-8), L = R01 + R10 + R23 + R32 of
+    R = U S V. The backward gives dL/dA23 = 0 instead of 1, while the raw gradient into the small
+    degenerate pair is only ~1e-8 of the total; the 1/sigma-scaled weight must flag it."""
+    import torch
+    from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+
+    def loss(A):
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(val=A, Ds=(4, 4))
+        U, S, V = yastn.linalg.svd(T, axes=(0, 1))
+        R = (U @ S @ V).to_dense()
+        return R[0, 1] + R[1, 0] + R[2, 3] + R[3, 2]
+
+    A = torch.diag(torch.tensor([1.0, 0.7, 1e-8, 1e-8], dtype=torch.float64)).requires_grad_()
+    with exact_svd_backward(), pytest.warns(DegenerateSVDWarning):
+        loss(A).backward()
