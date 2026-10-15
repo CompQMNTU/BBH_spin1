@@ -259,15 +259,6 @@ Use unit cells §4.4, D up to the cost limit, compare energies across cells, and
 
 ---
 
-## 9. CLAUDE.md (paste into repo)
+## 9. CLAUDE.md
 
-```
-Project: spin-1 BBH (+NNN) on triangular lattice with YASTN iPEPS. Read SPEC.md first; it is authoritative.
-Conventions: SPEC §2 (Site=(row,col); a1=(0,1), a2=(1,0), diag=(-1,1); NNN=(1,1),(-1,2),(2,-1)).
-Work milestone by milestone (SPEC §6). Do not start M(n+1) until M(n) tests pass.
-Python via uv only: `uv sync` (add `--extra ad` for torch/AD); never pip/conda into the env.
-Run tests: uv run pytest -q (slow ED tests: uv run pytest -m slow). CLI: uv run bbh-run config.yaml.
-yastn is pinned to a git commit in pyproject.toml; M0 findings refer to that commit.
-Never hard-code physics numbers in src/; reference values live in tests/ with a citation comment.
-When YASTN behavior is uncertain, write a minimal test and record the result in docs/yastn_findings.md.
-```
+The agent instructions (commands, working rules, YASTN pitfalls) live in `CLAUDE.md` at the repo root. Keep it in sync with §1, §2, §6 and §8 when those change.
