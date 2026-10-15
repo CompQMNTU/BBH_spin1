@@ -11,8 +11,8 @@ Owner: Ying-Jer Kao (NTU). This file is the contract for Claude Code: read it fu
 
 1. **Reproduce** the NN phase diagram of Niesen–Corboz (four phases AFM3 / AFQ / FM / FQ, all first order) with YASTN, to the precision of the benchmarks in §3.
 2. **Extend** to second-neighbor (triangular-lattice NNN, distance √3) couplings:
-   H = Σ_⟨ij⟩ [cos θ S_i·S_j + sin θ (S_i·S_j)²] + Σ_⟨⟨ij⟩⟩ [J₂ S_i·S_j + K₂ (S_i·S_j)²]
-   with the anisotropy knob J_anis of the paper kept as an option.
+   H = Σ_⟨ij⟩ a_ij [cos θ S_i·S_j + sin θ (S_i·S_j)²] + Σ_⟨⟨ij⟩⟩ a_ij [J₂ S_i·S_j + K₂ (S_i·S_j)²]
+   with the spatial anisotropy of the paper (Sec. IV F, Fig. 12) as an option: a_ij = 1 on the horizontal chains (class `h`) and a_ij = J_anis on all bonds between chains. The paper (NN only) scales the vertical and diagonal bonds, 0 ≤ J_anis ≤ 1, J_anis = 0 = decoupled chains, J_anis = 1 = isotropic; it used this to bound the Haldane phase (SU, D = 9, −π/4 < θ < π/4). Every NNN bond also connects different chains, so here J_anis scales them too (our choice; keeps J_anis = 0 decoupled). Default J_anis = 1.
 3. Build it as a small, tested package so parameter scans can run unattended on the cluster.
 
 Non-goals (for now): finite-T, excitations, SU(3)-symmetric tensors (YASTN is abelian-only).
