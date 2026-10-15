@@ -1,11 +1,10 @@
 """U4 (SPEC §1): fp_ctmrg (implicit-AD CTM) on TriangularLattice.
 
-Finding (docs/yastn_findings.md, U4): fp_ctmrg runs on TriangularLattice, but its gradient
-does NOT match finite differences: ~2% off at chi=8, ~40% off at chi>=16. Plain backprop
-through ctmrg_ gives the same AD value at chi=8, and RectangularUnitcell with the same
-pattern gives identical numbers, so the error is in differentiating the CTM step itself
-(SVD backward under truncation / near-zero singular values), not in the fixed-point series
-or the triangular geometry. Blocks the gradient gate of docs/ad_workflow.md §5.
+Finding (docs/yastn_findings.md, U4): fp_ctmrg runs on TriangularLattice. With yastn's own SVD
+backward its gradient misses finite differences (~2% at chi=8, ~40% at chi=16), because
+`safe_inverse` regularizes 1/x with an absolute 1e-12 while CTM singular values and gaps go far
+below 1e-6. With bbh_tri.yastn_compat.exact_svd_backward the gradient matches FD to ~1e-7, and no
+near-degenerate singular values carry gradient (DegenerateSVDWarning is an error here).
 """
 
 import numpy as np
@@ -14,6 +13,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 import yastn  # noqa: E402
+from bbh_tri.yastn_compat import exact_svd_backward  # noqa: E402
 import yastn.tn.fpeps as fpeps  # noqa: E402
 from yastn.tn.fpeps import Site  # noqa: E402
 from yastn.tn.fpeps.envs.rdm import rdm2x2_anti_diagonal  # noqa: E402
@@ -64,11 +64,9 @@ def test_fp_ctmrg_runs_on_triangular_lattice():
     assert all(torch.isfinite(p.grad).all() and p.grad.norm() > 0 for p in params)
 
 
-@pytest.mark.slow
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="AD gradient off by ~2% vs finite differences (U4, docs/yastn_findings.md)")
-def test_fp_ctmrg_gradient_matches_finite_difference():
+def directional_derivatives(chi, eps=1e-4):
+    """(AD, central FD) directional derivative of the loss along a fixed random direction."""
     loss, params = setup_problem()
-    chi, eps = 8, 1e-4
     value, _ = loss(params, chi)
     value.backward()
     v = [torch.randn(p.shape, generator=torch.Generator().manual_seed(0), dtype=p.dtype) for p in params]
@@ -76,5 +74,20 @@ def test_fp_ctmrg_gradient_matches_finite_difference():
     with torch.no_grad():
         lp = loss([p + eps * vi for p, vi in zip(params, v)], chi)[0].item()
         lm = loss([p - eps * vi for p, vi in zip(params, v)], chi)[0].item()
-    fd = (lp - lm) / (2 * eps)
-    assert ad == pytest.approx(fd, rel=1e-4)
+    return ad, (lp - lm) / (2 * eps)
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings("error::bbh_tri.yastn_compat.DegenerateSVDWarning")
+@pytest.mark.parametrize("chi", [8, 16])
+def test_fp_ctmrg_gradient_matches_finite_difference(chi):
+    with exact_svd_backward():
+        ad, fd = directional_derivatives(chi)
+    assert ad == pytest.approx(fd, rel=1e-5)
+
+
+@pytest.mark.slow
+def test_fp_ctmrg_gradient_wrong_without_patch():
+    """Canary: yastn's regularized SVD backward gives a ~2% error at chi=8 (U4)."""
+    ad, fd = directional_derivatives(8)
+    assert abs(ad - fd) / abs(fd) > 1e-2

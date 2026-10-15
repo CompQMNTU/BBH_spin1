@@ -13,7 +13,7 @@ import yastn.tn.fpeps as fpeps
 from yastn.tn.fpeps import Site
 from yastn.tn.fpeps.envs.rdm import measure_rdm_diag
 
-from yastn_utils import converged_ctm, spin1, ss_yastn
+from yastn_utils import converged_ctm, spin1, ss_yastn, svd_directional_derivative
 
 PINNED = "1.6.2.dev320+g7ed8ad0e6"
 
@@ -71,3 +71,30 @@ def test_obc_triangular_diagonal_bonds_contain_none():
 
 def test_no_measure_nsite_exact_oe():
     assert not hasattr(fpeps.EnvCTM, "measure_nsite_exact_oe")
+
+
+@pytest.mark.ad
+def test_svd_backward_absolute_regularizer_is_wrong_for_small_singular_values():
+    import numpy as np
+    spectrum = 0.5 ** np.arange(9)
+    ad, fd = svd_directional_derivative(spectrum, keep=6)
+    assert ad == pytest.approx(fd, rel=1e-6)  # fine at O(1) scale
+    ad, fd = svd_directional_derivative(1e-5 * spectrum, keep=6)
+    assert abs(ad - fd) / abs(fd) > 0.5  # wrong once singular values drop below ~1e-6
+
+
+@pytest.mark.parametrize("kw", [{"full_patch": True}, {"dims": (2, 3), "boundary": "obc", "full_patch": True}])
+def test_triangular_to_dict_loses_geometry(ops, kw):
+    psi = fpeps.product_peps(fpeps.TriangularLattice(**kw), ops.vec_z(val=1))
+    g = fpeps.Peps.from_dict(psi.to_dict()).geometry
+    assert (g.dims, g.boundary, g.full_patch) == ((3, 3), "infinite", False)  # constructor defaults
+
+
+def test_obc_without_full_patch_has_three_sites():
+    """boundary='obc' alone keeps the 3-site sublattice pattern; finite patches need full_patch=True."""
+    assert len(fpeps.TriangularLattice(dims=(2, 3), boundary="obc").sites()) == 3
+
+
+def test_full_patch_bonds_without_direction_raises():
+    with pytest.raises(TypeError):
+        fpeps.TriangularLattice(full_patch=True).bonds()

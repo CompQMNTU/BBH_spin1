@@ -3,7 +3,7 @@
 yastn `1.6.2.dev320+g7ed8ad0e6`, built with
 `uv run --no-project --with "yastn @ git+https://github.com/yastn/yastn@7ed8ad0e6" --with numpy,scipy`.
 Line numbers refer to that version. Checked 2026-10-14; re-check if the pin in `pyproject.toml` changes.
-Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`). Run everything with `uv run pytest -m "slow or not slow"` (~25 s).
+Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2, U3 smoke, D=1 SU(3) energy), `tests/test_yastn_canaries.py` (pinned upstream behavior incl. bugs), `tests/test_fp_ctmrg.py` (U4; needs `--extra ad`), `tests/test_yastn_compat.py` (our workarounds). Run everything with `uv run pytest -m "slow or not slow"` (~40 s).
 
 ## API (summary of SPEC §1)
 
@@ -51,24 +51,48 @@ Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2
 
 `measure_nsite_exact` runs on a 2×3 window at small D. Cost at the target D, χ is not yet measured.
 
-## U4 — `fp_ctmrg` on TriangularLattice (runs; gradient wrong)
+## U4 — `fp_ctmrg` on TriangularLattice (resolved with a patch)
 
-Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularLattice, dense, D=2 random tensors (normalized), loss = Σ_diag ⟨Sz Sz⟩ via `rdm2x2_anti_diagonal`, `fp_ctmrg` with `policy='fullrank'`, `corner_tol=1e-10`. Check: directional derivative along a random direction, AD vs central finite differences (FD stable to 1e-8 for ε = 1e-3…1e-5). One forward+backward ≈ 4–5 s.
+Setup (`tests/test_fp_ctmrg.py`): torch backend, float64, √3×√3 TriangularLattice, dense, D=2 random tensors (normalized), loss = Σ_diag ⟨Sz Sz⟩ via `rdm2x2_anti_diagonal`, `fp_ctmrg` with `policy='fullrank'`, `corner_tol=1e-10`. Check: directional derivative along a random direction, AD vs central finite differences (FD stable to 1e-8 for ε = 1e-3…1e-5). One forward+backward ≈ 4–9 s.
 
-- **Runs:** forward converges, backward series converges (last `full grad diff` ≈ 1e-10), gradient finite. Returns only `env`.
-- **Gradient is wrong:**
+- **Runs:** forward converges, backward series converges, gradient finite. Returns only `env`.
+- **Bug (upstream):** `backend/linalg/torch_svd_gesdd.py:4`, `safe_inverse(x, eps_abs)` overwrites its argument with `eps_abs=1.0e-12` and returns x/(x²+1e-12). The scale-relative `scaled_eps = Smax²·ad_decomp_reg` computed in `SVDGESDD.backward` is never used. So 1/σ and 1/(σᵢ±σⱼ) are damped whenever σ or a gap is below ~1e-6 in **absolute** size. The CTM projector SVDs in the test have σ_max ≈ 7e-2, σ_min down to 1e-22 and exact-zero gaps.
+- **Not the cause:** truncation. A truncated `svd_with_truncation` with O(1), well-separated singular values matches FD to 1e-9 (the full SVD is computed first, so the discarded-subspace coupling is present). Not the fixed-point series (plain backprop through `ctmrg_` gives the same AD value), not the triangular geometry (`RectangularUnitcell` gives identical numbers).
+- **Evidence** (same state, directional derivative; FD = 0.141684 / 0.141671 / 0.141666 at χ = 4 / 8 / 16):
 
-  | χ | SVD tol | AD (`fp_ctmrg`) | AD (plain backprop through `ctmrg_`) | FD | rel. error |
-  |---|---|---|---|---|---|
-  | 4 | 1e-14 | 0.14004 | — | 0.14168 | 1.2e-2 |
-  | 8 | 1e-14 / 1e-8 | 0.144614 | 0.144614 | 0.141671 | 2.0e-2 |
-  | 16 | 1e-14 | 11.39 | — | 0.14166 | ≈1 |
-  | 16 | 1e-8 | 0.2348 | 1.9e5 | 0.14167 | 0.40 (fp) |
-  | 24 | 1e-8 | 0.2348 | — | 0.14167 | 0.40 (χ=24, tol 1e-14: CTM forward does not converge → `NoFixedPointError`) |
+  | χ | yastn as is | `safe_inverse` with the intended scaled ε | exact inverse (0 at 0) |
+  |---|---|---|---|
+  | 4 | 1.2e-2 | 1.9e-6 | 4.4e-8 |
+  | 8 | 2.0e-2 | 1.3e-6 | 7.2e-8 |
+  | 16 | 4.0e-1 | 9.5e-4 | 7.5e-8 |
 
-- **Localization:** at χ=8, plain backprop and `fp_ctmrg` agree to 9 digits but both miss FD by 2% → not the fixed-point series. `RectangularUnitcell(pattern=[[0,1,2],[2,0,1],[1,2,0]])` (same square network) gives identical numbers → not the triangular geometry. FD at χ=16 and 24 agree → the environment is saturated there, yet AD is worse.
-- **Likely cause (not proven):** the torch SVD backward (`backend/linalg/torch_svd_gesdd.py`, `SVDGESDD.backward`) is the full-SVD formula with a 1e-12 regularizer. Under truncation it omits the coupling to the discarded singular vectors (fits the 1–2% at χ = 4–8); with kept near-zero singular values it amplifies 1/σ terms (fits the blow-up at χ ≥ 16).
-- **Consequence:** the AD gradient gate (`docs/ad_workflow.md` §5) fails today. M4 must fix or work around this before any variational optimization. Candidate directions: a truncated-SVD backward with the discarded-subspace correction; choosing χ/tol so no near-zero singular values are kept; comparing with an eigendecomposition-based projector. Next diagnostic: check whether the error tracks the discarded weight at χ=4–8.
+  Isolated SVD (12×9, spectrum scale·0.5ᵏ, keep 6): exact at scale 1, wrong sign at scale 1e-5.
+- **Workaround:** `bbh_tri.yastn_compat.exact_svd_backward()` (context manager) / `patch_svd_backward()` replace `SVDGESDD.backward` by `svd_backward`: same formula, exact 1/σ, 1/(σᵢ+σⱼ), 1/(σᵢ−σⱼ), each 0 only at exactly 0. `backward()` must run inside the context.
+- **Degenerate singular values (Codex review of PR #4).** For a kept pair with |σᵢ−σⱼ| at roundoff level, the 1/(σᵢ−σⱼ) term of a gauge-invariant loss is 0/0 with a finite, nonzero limit. Roundoff destroys it, and no formula that sees only the incoming gradients recovers it. Measured on a 8×6 matrix, kept pair at 0.7, 6 seeds:
+
+  | gap | exact inverse (this patch) | gaps set to 0 below 1e-12·σ_max |
+  |---|---|---|
+  | 0, 2⁻⁵² | 1e-2 … 8e-1 | 1.6e-1 |
+  | 1e-14 | 1e-4 … 1e-2 | 8e-2 |
+  | 1e-12 | 1e-6 … 6e-4 | 8e-2 |
+  | ≥ 1e-9 | ≤ 1e-7 | ≤ 1e-7 |
+
+  So `svd_backward` keeps the exact inverse (0 where x = 0 or 1/x would overflow, so discarded subnormal tails cannot produce inf·0 = NaN) and raises `DegenerateSVDWarning` **whenever any gradient reaches a singular vector** of (a) a pair with gap ≤ 1e-10·σ_max **of that block**, or (b) a σ, gap or σᵢ+σⱼ whose reciprocal is undefined or overflows; it also warns if the result is not finite. There is no tolerance. Discarded columns get exactly zero gradient, so CTM tails (σ ≈ 1e-20, zero gaps) never trigger it: no warning at χ = 4–16.
+  History, from six Codex review passes of PR #4. Each fraction- or magnitude-based version had a counterexample, so the test is now structural:
+  - skew parts as the measure: they cancel exactly for a symmetric incoming gradient (A = diag(1, .7, .7, .3), keep 3, L = R₁₂ + R₂₁: AD 0 vs FD 2);
+  - all-block σ_max: yastn passes the maximum over symmetry blocks, which flagged a well-resolved block (2e-12, 1e-12) next to a norm-1 block. The scale is now block-local;
+  - raw Uᴴ·gU weights: they carry a factor σ, hiding small pairs (diag(1, .7, 1e-8, 1e-8): dL/dA₂₃ = 0 vs 1); a 1/σ rescaling with an ε·σ_max floor then hid a pair at 1e-22;
+  - any fraction of a total: a projector term on small singular values inflated the denominator (diag(1, .7, .7, 2e-8, 1e-8, 1e-9), L = R₁₂ + R₂₁ + P₃₄ + P₄₃: AD 0 vs 1);
+  - overflow: diag(1, 1e-300, 1e-300 − 1e-310), keep 1: discarded gap ~1e-310, 1/gap = inf, NaN gradient. Then diag(1, 1.2e-308, 6e-309): finite F and G overflow in F + G. Fix: 1/σ, 1/gap and 1/sum are formed only for singular vectors (pairs) that receive gradient; all others are exactly 0;
+  - an active, well-resolved pair at the float64 limit (diag(1e-307, 9.9e-308)): 1/gap overflows and was dropped silently. Now an active pair with an unusable 1/gap or 1/sum also warns, as does any non-finite result.
+  **Undetectable case: exactly zero kept singular values.** gU and gV carry a factor σ, so for σ = 0 nothing about the lost term reaches the backward, and kept zeros look like discarded ones (`test_degenerate_zero_pair_is_undetectable`, strict xfail). Hence AD runs must truncate with `opts_svd['tol'] > 0` so that no zero or roundoff-level singular value is kept (our CTM runs use tol = 1e-8). Known false positive: a loss that depends on a degenerate pair only through its span (a projector onto both vectors).
+- **Tests:** `test_fp_ctmrg_gradient_matches_finite_difference[8,16]` (patched, rel 1e-5, `DegenerateSVDWarning` is an error), `test_fp_ctmrg_gradient_wrong_without_patch` and the SVD canary in `test_yastn_canaries.py` (pin the upstream bug), `tests/test_yastn_compat.py` (small σ, resolved and degenerate pairs, each Codex counterexample, the exact-zero limitation).
+- Reported upstream: not yet.
+
+## Serialization
+
+- `TriangularLattice.to_dict()` (`_geometry.py:409`) stores only `pattern`; `Peps.from_dict` calls `TriangularLattice(**d['geometry'])`, which ignores it. A `full_patch=True` (9-site) state reloads as the 3-site √3×√3 cell, an OBC 2×3 `full_patch=True` state (6 sites) as infinite 3×3, silently. (OBC needs `full_patch=True` anyway; without it `dims` is ignored, see the API table.) Workaround: `bbh_tri.yastn_compat.peps_to_dict(psi)` stores `dims`, `boundary`, `full_patch` instead; `Peps.from_dict` then rebuilds the right geometry (tested for default, full_patch and OBC). The default √3×√3 cell round-trips either way.
+- `TriangularLattice(full_patch=True).bonds()` (no direction) raises `TypeError` (tuple + list, `_geometry.py:407`). Iterate `bonds('h')`, `bonds('v')`, `bonds('d')` separately.
 
 ## Symmetric configs
 
