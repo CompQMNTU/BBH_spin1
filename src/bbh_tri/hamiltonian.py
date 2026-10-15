@@ -36,5 +36,9 @@ class Model:
 
 
 def energy_per_site(class_energies):
-    """E/site from mean bond energies per class (one bond per class and site, SPEC §2.3)."""
-    return float(sum(class_energies.values()))
+    """E/site from mean bond energies per class (one bond per class and site, SPEC §2.3).
+
+    Returns the backend scalar unchanged (no ``float``), so a torch energy keeps its autograd graph
+    and can serve as the AD loss; convert only for reporting.
+    """
+    return sum(class_energies.values())

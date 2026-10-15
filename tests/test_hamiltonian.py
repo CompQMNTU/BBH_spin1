@@ -41,3 +41,13 @@ def test_su3_point_is_swap():
 
 def test_energy_per_site():
     assert energy_per_site({"h": 0.5, "v": 0.25, "d": -0.25}) == pytest.approx(0.5)
+
+
+@pytest.mark.ad
+def test_energy_per_site_keeps_autograd():
+    """Codex review of PR #5: the aggregate must stay a differentiable torch scalar (AD loss)."""
+    torch = pytest.importorskip("torch")
+    x = torch.tensor([0.5, 0.25, -0.25], dtype=torch.float64, requires_grad=True)
+    e = energy_per_site({"h": x[0], "v": x[1], "d": x[2] * 2})
+    e.backward()
+    assert torch.allclose(x.grad, torch.tensor([1.0, 1.0, 2.0], dtype=torch.float64))

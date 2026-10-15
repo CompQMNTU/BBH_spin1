@@ -99,3 +99,16 @@ def test_spin_vector_moment(dense):
     v = np.array([1, np.sqrt(2), 1]) / 2  # |Sx = +1> in basis (+1, 0, -1)
     exp = {k: (v.conj() @ op.as_matrix(dense, s) @ v).real for k, s in op.spin_vector(dense).items()}
     assert exp["Sx"] == pytest.approx(1) and op.vector_norm(exp) == pytest.approx(1)
+
+
+def test_as_matrix_charged_single_site_operators(dense):
+    """Codex review of PR #5: U1 S+ stores only the sectors it connects; as_matrix must still give the
+    full 3x3 matrix and agree with dense."""
+    u1 = op.spin1("U1")
+    for name in ("sp", "sm", "sz", "I"):
+        assert np.allclose(op.as_matrix(u1, getattr(u1, name)()), op.as_matrix(dense, getattr(dense, name)())), name
+
+
+def test_as_matrix_charged_two_site_operator(dense):
+    u1 = op.spin1("U1")
+    assert np.allclose(op.as_matrix(u1, yastn.fkron(u1.sp(), u1.sz())), op.as_matrix(dense, yastn.fkron(dense.sp(), dense.sz())))

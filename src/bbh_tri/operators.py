@@ -73,19 +73,26 @@ def vector_norm(expectations):
     return float(np.sqrt(sum(abs(x) ** 2 for x in expectations.values())))
 
 
+def _full_numpy(ops, op):
+    """``op.to_numpy()`` on full physical legs. A charged U1 operator (e.g. S+) stores only the
+    sectors it connects, so a bare ``to_numpy()`` would return a smaller array."""
+    leg = ops.space()
+    return op.to_numpy(legs={i: leg if s == leg.s else leg.conj() for i, s in enumerate(op.s)})
+
+
 def basis_permutation(ops):
     """Permutation taking the config's basis to the canonical order Sz = (+1, 0, -1).
 
     The dense config already uses it; U1's ``to_numpy`` orders charges (-1, 0, +1).
     """
-    return np.argsort(-np.real(np.diag(ops.sz().to_numpy())), kind="stable")
+    return np.argsort(-np.real(np.diag(_full_numpy(ops, ops.sz()))), kind="stable")
 
 
 def as_matrix(ops, op):
     """Single-site (3x3) or two-site (9x9, rows (out1, out2), columns (in1, in2)) operator as a numpy
     matrix in the canonical basis Sz = (+1, 0, -1)."""
     p = basis_permutation(ops)
-    a = op.to_numpy()
+    a = _full_numpy(ops, op)
     if a.ndim == 2:
         return a[np.ix_(p, p)]
     if a.ndim == 4:
