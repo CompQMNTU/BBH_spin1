@@ -85,9 +85,16 @@ def class_energies(psi, env, ops, model):
 
 
 def energy(psi, env, ops, model):
-    """(E/site, {class: mean bond energy}); real parts."""
+    """(E/site, {class: mean bond energy}); real parts.
+
+    Each class mean is weighted by its bonds per site. On the infinite lattice that weight is 1
+    (form (1) of the paper, :func:`hamiltonian.energy_per_site`); on a finite OBC patch it is
+    len(bonds) / len(sites) < 1, so E/site = (sum of all bond energies) / (number of sites).
+    """
     e = {c: float(np.real(v)) for c, v in class_energies(psi, env, ops, model).items()}
-    return energy_per_site(e), e
+    n = len(psi.geometry.sites())
+    w = {c: len(lattice.bonds(psi.geometry, c)) / n for c in e}
+    return energy_per_site({c: w[c] * v for c, v in e.items()}), e
 
 
 def site_expectations(env, ops_dict):

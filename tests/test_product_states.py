@@ -33,11 +33,12 @@ def test_product_state_table(optimized, theta, e_ref):
 
 @pytest.mark.parametrize("theta", np.linspace(0, 2 * np.pi, 9))
 def test_seed_energy_formulas(theta):
-    """E_FM = 3(cos + sin), E_FQ = 6 sin, E_AFQ = 3 sin (SPEC §3)."""
+    """E_FM = 3(cos + sin), E_FQ = 6 sin, E_AFQ = 3 sin (SPEC §3); E_SU3 = -cos + 4 sin (direct calculation)."""
     m = Model(theta)
     assert states.product_energy(m, states.seed_vectors("FM")) == pytest.approx(3 * (np.cos(theta) + np.sin(theta)), abs=1e-12)
     assert states.product_energy(m, states.seed_vectors("FQ")) == pytest.approx(6 * np.sin(theta), abs=1e-12)
     assert states.product_energy(m, states.seed_vectors("AFQ")) == pytest.approx(3 * np.sin(theta), abs=1e-12)
+    assert states.product_energy(m, states.seed_vectors("SU3")) == pytest.approx(-np.cos(theta) + 4 * np.sin(theta), abs=1e-12)
 
 
 def test_120_coherent_state_is_not_optimal_at_su3_point():
@@ -140,7 +141,7 @@ def test_obc_patch_energy_matches_bond_sum(dims):
     geo = lattice.geometry("obc", dims)
     psi = states.product_peps(geo, vs, ops)
     env = measure.ctm_env(psi, chi=1)
-    _, by_class = measure.energy(psi, env, ops, model)
+    e_site, by_class = measure.energy(psi, env, ops, model)
     assert set(by_class) == {c for c in model.couplings() if lattice.bonds(geo, c)}
     for cls, (J, K) in model.couplings().items():
         if cls not in by_class:
@@ -149,3 +150,14 @@ def test_obc_patch_energy_matches_bond_sum(dims):
         ref = np.mean([np.kron(vs[lattice.sublattice(a)], vs[lattice.sublattice(b)]) @ H @
                        np.kron(vs[lattice.sublattice(a)], vs[lattice.sublattice(b)]) for a, b in lattice.bonds(geo, cls)])
         assert by_class[cls] == pytest.approx(ref, abs=1e-12), cls
+    total = sum(by_class[c] * len(lattice.bonds(geo, c)) for c in by_class)
+    assert e_site == pytest.approx(total / len(geo.sites()), abs=1e-12)
+
+
+def test_obc_energy_per_site_counts_patch_bonds():
+    """2x3 FM patch at theta = 0: 4 h + 3 v + 2 d bonds of S·S = 1 on 6 sites, so E/site = 9/6."""
+    ops = operators.spin1("dense")
+    geo = lattice.geometry("obc", (2, 3))
+    psi = states.product_peps(geo, states.seed_vectors("FM"), ops)
+    e_site, _ = measure.energy(psi, measure.ctm_env(psi, chi=1), ops, Model(0.0))
+    assert e_site == pytest.approx(1.5, abs=1e-12)

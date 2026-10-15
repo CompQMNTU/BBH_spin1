@@ -29,8 +29,9 @@ def seed_vectors(kind):
 
     'FM' all |+1> (moment along z); 'FQ' all |0> (director along z); 'AFQ' directors x, y, z,
     i.e. the time-reversal-invariant states |x> ~ |-1> - |+1>, |y> ~ |-1> + |+1> (real after a
-    global phase), |z> = |0>; 'SU3' the orthogonal triad |+1>, |0>, |-1> (degenerate with AFQ only
-    at theta = pi/4). AFM3 has no fixed seed: use :func:`optimize_product_state`.
+    global phase), |z> = |0>; 'SU3' the orthogonal triad |+1>, |0>, |-1>.
+    With J = cos(theta), K = sin(theta): E_SU3 = -J + 4K and E_AFQ = 3K, equal wherever J = K
+    (theta = pi/4 and 5pi/4). AFM3 has no fixed seed: use :func:`optimize_product_state`.
     """
     up, zero, down = basis_state(1), basis_state(0), basis_state(-1)
     if kind == "FM":

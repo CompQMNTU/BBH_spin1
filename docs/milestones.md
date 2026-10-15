@@ -30,6 +30,7 @@ Findings:
 - `rdm2x2_anti_diagonal(anchor)` returns legs (bottom-left, top-right) = our `d` bond order with anchor (x−1, y).
 - `measure_nsite_exact` and `measure_2x2` accept U1 charged operators (S±).
 - A class with no bonds on a finite patch (`nnn_k2` on 2 rows) is left out of `class_energies`.
+- `measure.energy` weights each class mean by bonds per site (1 on the infinite lattice; len(bonds)/len(sites) on an OBC patch), so finite-patch E/site = total bond energy / sites.
 
 Acceptance (SPEC §6 M2), `tests/test_product_states.py`:
 - §3 table to 1e-10 (minimizer: ~1e-15); seed formulas E_FM, E_FQ, E_AFQ over θ; 120° coherent state = 2.254 at π/4.
