@@ -22,6 +22,9 @@ THIRD = {"3rd_h": (0, 2), "3rd_v": (2, 0), "3rd_d": (-2, 2)}
 VECTORS = {**NN, **NNN, **THIRD}
 NN_CLASSES = tuple(NN)
 NNN_CLASSES = tuple(NNN)
+# Bonds along the horizontal chains (row unchanged). All other NN and all NNN bonds connect
+# different chains; the spatial anisotropy J_anis acts on those (hamiltonian.Model).
+CHAIN_CLASSES = tuple(c for c in NN_CLASSES + NNN_CLASSES if VECTORS[c][0] == 0)
 
 
 def norm2(v):
