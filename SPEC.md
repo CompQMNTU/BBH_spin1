@@ -114,7 +114,7 @@ Q-norm of |sz=0⟩ = 2/√3; of |±1⟩ = 1/√3.
 - The 120° spin-coherent state has ⟨S·S⟩ = −1/2, ⟨(S·S)²⟩ = 1.5625, so E = 3(−½ cos θ + 1.5625 sin θ). This is optimal only at θ = 0.
 - For 3π/2 < θ < 2π the optimal product state is a coplanar 3-sublattice state with **reduced** moment: m ≈ 0.47, 0.78, 0.95, 0.99 at θ = 1.66, 1.7, 1.8, 1.9 π. At 1.7π: E_opt = −4.9576 vs E_120coh = −4.674.
 - The mean-field FQ→AFM3 transition at θ = arctan(−2)+2π = 1.6476π is **continuous**: m → 0, and E_opt − E_FQ ∝ (θ−θ_c)². It is not a level crossing.
-- Consequence: `states.py` AFM3 seeds and M2 tests must use the optimized general product state (store the minimizer in tests/), not a 120° coherent state.
+- Consequence: `states.py` AFM3 seeds and M2 tests must use the optimized general product state, not a 120° coherent state. The minimizer is `states.optimize_product_state` (in `src`, since the AFM3 seed needs it); the reference values it must reproduce live in `tests/test_product_states.py`.
 
 Exact-diagonalization check (to write): primary role is catching operator / bond-routing bugs, not accuracy.
 - **Do not use a 3×3 torus when J₂, K₂ ≠ 0.** Mod 3, all three NNN vectors (1,1), (−1,2), (2,−1) reduce to ±(1,1). Each site then has only 2 distinct NNN partners, and 3rd neighbors coincide with NN. Bond classes become indistinguishable, which defeats the routing test.

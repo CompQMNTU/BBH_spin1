@@ -19,3 +19,23 @@ Tests: `tests/test_lattice.py`, `tests/test_operators.py` (dense and U1), `tests
 
 Open:
 - `tests/yastn_utils.py` (M0 helpers) still has its own `diag_path` / `ss_yastn`; switch the M0 tests to `bbh_tri` when they are next touched.
+
+## M2 — D = 1 product states (2026-10-15)
+Modules:
+- `states.py`: phase seeds (`FM`, `FQ`, `AFQ` with real |x>, |y>, |z> directors, `SU3` triad), mean-field E/site of a 3-sublattice product state (NN classes couple AB, BC, CA; NNN classes AA, BB, CC; all couplings incl. J_anis), `optimize_product_state` (L-BFGS over complex single-site states from the seeds plus random starts), `moment`, `product_peps` (vectors in the canonical basis; complex vectors need a complex config; U1 needs Sz eigenstates).
+- `measure.py`: `ctm_env`, bond energy per class from rdms (`h` rdm1x2, `v` rdm2x1, `d` rdm2x2_anti_diagonal, `nnn_d` rdm2x2_diagonal) or, for the knight moves, `measure_nsite_exact` on the 12-term single-site expansion of J S·S + K (S·S)²; `energy` (E/site, per class); `order_parameters` (m, |Q| per site; U1 uses Sz, Q2 only).
+
+Findings:
+- rdm contraction: `tensordot(O, rdm, axes=((0,1,2,3),(1,0,3,2)))` / Tr; the other pairing fails the signature check. Verified against `measure_nn` with a non-Hermitian operator on a complex state (a real symmetric h cannot tell the orders apart).
+- `rdm2x2_anti_diagonal(anchor)` returns legs (bottom-left, top-right) = our `d` bond order with anchor (x−1, y).
+- `measure_nsite_exact` and `measure_2x2` accept U1 charged operators (S±).
+- A class with no bonds on a finite patch (`nnn_k2` on 2 rows) is left out of `class_energies`.
+- `measure.energy` weights each class mean by bonds per site (1 on the infinite lattice; len(bonds)/len(sites) on an OBC patch), so finite-patch E/site = total bond energy / sites.
+
+Acceptance (SPEC §6 M2), `tests/test_product_states.py`:
+- §3 table to 1e-10 (minimizer: ~1e-15); seed formulas E_FM, E_FQ, E_AFQ over θ; 120° coherent state = 2.254 at π/4.
+- FQ optimal with E = 6 sin θ, m = 0 for 3π/2 < θ ≤ θ_c^MF; above it m grows continuously from 0 and E_opt − E_FQ scales as (θ − θ_c)² (ratio 4 within 20%); reduced AFM3 moments 0.47 / 0.78 / 0.95 / 0.99 at 1.66 / 1.7 / 1.8 / 1.9 π, E(1.7π) = −4.9576.
+- Full pipeline (product PEPS → CTM χ = 1 → rdm / nsite) equals the mean-field energy to 1e-10 for every coupled class, including NNN and J_anis; U1 = dense for Sz-eigenstate seeds; |Q| through CTM; OBC patches.
+
+Open:
+- SPEC §5 lists an `m=2/3` product seed for `states.py`; its definition is not in SPEC, so it is not implemented.

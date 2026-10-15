@@ -24,13 +24,13 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 
 - `SPEC.md`: goals, conventions (§2), reference numbers (§3), algorithms (§4), target package layout (§5), milestones (§6), pitfalls (§8).
 - `docs/yastn_findings.md`: verified YASTN behavior and bugs at the pinned commit. `docs/ad_workflow.md`: design of the AD/fp_ctmrg ground-state workflow.
-- `src/bbh_tri/`: the package. `lattice.py` (bond classes, paths, geometries), `operators.py` (S·S, (S·S)², Q; dense and U1), `hamiltonian.py` (`Model`), `yastn_compat.py` (workarounds for YASTN bugs). Remaining modules of SPEC §5 are added milestone by milestone.
+- `src/bbh_tri/`: the package. `lattice.py` (bond classes, paths, geometries), `operators.py` (S·S, (S·S)², Q; dense and U1), `hamiltonian.py` (`Model`), `states.py` (product states, mean-field minimizer), `measure.py` (CTM energies per class, m, |Q|), `yastn_compat.py` (workarounds for YASTN bugs). Remaining modules of SPEC §5 are added milestone by milestone.
 - `docs/milestones.md`: a short note per finished milestone (design decisions, open items).
-- `tests/`: `test_lattice.py`, `test_operators.py`, `test_hamiltonian.py` (M1), `test_routing.py` (U1), `test_measure.py` (U2), `test_fp_ctmrg.py` (U4), `test_yastn_canaries.py` (pins current upstream behavior, including bugs), `test_yastn_compat.py` (our workarounds), `yastn_utils.py` (test-only helpers).
+- `tests/`: `test_lattice.py`, `test_operators.py`, `test_hamiltonian.py` (M1), `test_product_states.py` (M2), `test_routing.py` (U1), `test_measure.py` (U2), `test_fp_ctmrg.py` (U4), `test_yastn_canaries.py` (pins current upstream behavior, including bugs), `test_yastn_compat.py` (our workarounds), `yastn_utils.py` (test-only helpers).
 
 ## Working rules
 
-- Milestones (SPEC §6): M0 and M1 done; M4's AD blocker fixed (PR #4). Do not start M(n+1) until M(n) tests pass.
+- Milestones (SPEC §6): M0, M1 and M2 done; M4's AD blocker fixed (PR #4). Do not start M(n+1) until M(n) tests pass.
 - Build bonds with `bbh_tri.lattice.bonds` and gate paths with `bbh_tri.lattice.path(s)`; never use `geometry.bonds()`.
 - Conventions (SPEC §2): `Site = (row, col)`; a₁ = (0,1), a₂ = (1,0), NN diagonal = (−1,1); NNN = (1,1), (−1,2), (2,−1). Energy per site, form (1) of the paper. Dense Spin1 basis order is (+1, 0, −1).
 - Never hard-code physics numbers in `src/`. Reference values live in `tests/` with a citation comment.
