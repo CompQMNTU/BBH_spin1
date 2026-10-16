@@ -117,3 +117,16 @@ def product_peps(geo, vectors, ops):
             vec = vec + t
         tensors[s] = vec
     return fpeps.product_peps(geo, tensors)
+
+
+def random_product_peps(geo, ops, seed=0):
+    """D = 1 PEPS with an independent random real state on every site of ``geo`` (dense only)."""
+    if not operators.is_dense(ops):
+        raise ValueError("random product states need a dense config")
+    rng = np.random.default_rng(seed)
+    basis = [ops.vec_z(val=sz) for sz in (1, 0, -1)]
+    tensors = {}
+    for s in geo.sites():
+        c = rng.normal(size=3)
+        tensors[s] = c[0].item() * basis[0] + c[1].item() * basis[1] + c[2].item() * basis[2]
+    return fpeps.product_peps(geo, tensors)
