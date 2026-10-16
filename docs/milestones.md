@@ -39,3 +39,22 @@ Acceptance (SPEC §6 M2), `tests/test_product_states.py`:
 
 Open:
 - SPEC §5 lists an `m=2/3` product seed for `states.py`; its definition is not in SPEC, so it is not implemented.
+
+## M3 — NN imaginary-time evolution (2026-10-16)
+Modules:
+- `gates.py`: up-triangle anchored at b = (x, y): a = b + (1, 0), c = b + (0, 1), bonds v = (b, a), h = (b, c), d = (a, c); every NN bond lies in exactly one up-triangle. exp(−τ h▲) is cut by two SVDs into a 3-site MPO along the square-NN path a → b → c and passed as `Gate(G=[G_a, G_b, G_c], sites=(a, b, c))` (legs ket, bra, virtual; left cut leg signature −1, as in `decompose_nn_gate`); `evolution_step_` then truncates both path bonds. On OBC patches, triangles cut by the boundary fall back to 2-site gates (`d` routed with `lattice.path`). `trotter2` = gates at τ/2 plus the reversed list. NNN gates: M5 (`nn_gates` raises for J₂, K₂ ≠ 0).
+- `evolve.py`: second-order Trotter, τ = 0.1 → 0.05 → 0.02 → 0.01, truncation to D with EnvBP (default) or EnvNTU; each stage ends when the CTM energy (χ = D², fresh environment) changes by < 1e-7 between checks 20 steps apart, or after 400 steps. Site tensors are renormalized after every step.
+- `states.random_product_peps`: independent random real state per site (dense).
+- `scripts/m3_theta_scan.py` (resumable JSONL scan, state saving, warm start), `scripts/m3_plot_scan.py`.
+
+Findings:
+- **`evolution_step_` does not normalize the PEPS.** Tensor norms change by ~exp(−τE) per step and overflow/underflow to NaN after ~10³ steps (52 of 400 scan runs died with `array must not contain infs or NaNs` before the fix; θ = 1.5π grows ~1e5 per 20 steps). Once NaNs appear, `truncate_bipartite_` also raises `UnboundLocalError: pinv_c` (`_evolution.py:704`). Fix: `evolve.normalize_` after each step.
+- **Unstable product seeds do not stay put.** The FM product state is an exact eigenstate of every gate, yet outside the FM phase round-off is amplified and the FM-seeded run reaches the same state as the others (often within 1e-8, so `best_per_theta` reports it under the `FM` label).
+- **FM multiplet degeneracy:** from a random start in the FM phase, D = 2 converges to the exact FM energy with m = 0.74 (a superposition of FM directions). Seeded runs keep m = 1; the scan resolves ties in favor of the seeds.
+- **χ = D² is not converged at the 1e-5 level.** At θ = π/2 every bond obeys (S·S)² ≥ 1, so E ≥ 3; the D = 4 scan state gives E = 2.9999942 at χ = 16 (h, v bonds 0.9999956 < 1), 3.0000107 at χ = 24 and 3.0000115 at χ = 36. Scan energies therefore carry ~2e-5 CTM error; enough for the phase diagram, but precise energies need χ ≥ 1.5 D² and the χ, 1.5χ check of SPEC §4.3.
+- NTU (`which='NN'`, the cheapest) at D = 4: ~20 s per Trotter step vs ~0.3 s for BP, half in the bond metric (`_g_NN`), half in the truncation optimization; `initialization='SVD'` or smaller `max_iter` does not help. On the shared machine (load ~40) a step takes ~76 s. NTU warm start from the 80 BP winners (τ = 0.02, 0.01, `results/m3_scan_D4_NTU.jsonl`) is still running; the first finished point (θ = 0.525π, AFQ) agrees with BP to 8e-9. The NTU comparison follows in a separate commit.
+
+Acceptance (SPEC §6 M3):
+- (a) FM region: E = 3(cos θ + sin θ) to 1e-6 at θ = 0.6π, π, 1.2π from random starts at D = 2 (`tests/test_evolve.py`); in the D = 4 scan to ≲1e-9 over 0.525π–1.25π.
+- (b) θ = 0, EnvBP, random start: E = −1.7878 (D = 2), −1.8102 (3), −1.8210 (4), −1.8298 (5), monotonically towards −1.8368(5) (D → ∞, paper) and below the D = 1 value −1.5; m = 0.89, 0.86, 0.84 (D = 2–4). D = 4 took 160 s, D = 5 1.6 h (single thread).
+- (c) 80-point scan, D = 4, EnvBP, lowest energy of five starts (FM, FQ, AFQ, SU3 seeds, random), `docs/figures/m3_scan_D4.png`, data `results/m3_scan_D4.jsonl`: AFM3 0–0.225π (m 0.84 → 0.48), AFQ 0.25–0.475π (m = 0, |Q| up to 1.12), FM 0.5–1.25π (m = 1, |Q| = 1/√3), FQ 1.275–1.875π (m = 0), AFM3 from 1.9π (m = 0.84). Jumps in m and |Q| at π/4, π/2, 5π/4 and between 1.875π and 1.9π (paper: θ_c = 1.873(7)π). SPEC asks for D ≤ 6; only D = 4 is scanned so far (D = 5 takes ~1.6 h per point).
