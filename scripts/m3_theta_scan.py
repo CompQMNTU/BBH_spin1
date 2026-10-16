@@ -31,6 +31,14 @@ import numpy as np
 
 INITS = ("FM", "FQ", "AFQ", "SU3", "random")
 TIE = 1e-8
+DEFAULT_SCHEDULE = [0.1, 0.05, 0.02, 0.01]  # bbh_tri.evolve.DEFAULT_SCHEDULE
+
+
+def run_params(r):
+    """Calculation parameters of a scan record; records written before 'schedule' and
+    'warm_start' were stored used the default schedule and no warm start."""
+    return {"n_theta": r["n_theta"], "D": r["D"], "env": r["env"],
+            "schedule": r.get("schedule", DEFAULT_SCHEDULE), "warm_start": r.get("warm_start")}
 
 
 def best_per_theta(path):
@@ -101,13 +109,21 @@ def main():
     if a.save_dir:
         os.makedirs(a.save_dir, exist_ok=True)
 
+    params = {"n_theta": a.n_theta, "D": a.D, "env": a.env, "schedule": list(schedule), "warm_start": a.from_dir}
     done = set()
     if os.path.exists(a.out):
         with open(a.out) as f:
-            done = {(r["theta_k"], r["init"]) for r in map(json.loads, f)}
+            for r in map(json.loads, f):
+                bad = {k: v for k, v in run_params(r).items() if v != params[k]}
+                if bad:
+                    raise SystemExit(f"{a.out} holds runs with {bad}, not {params}; use another --out")
+                done.add((r["theta_k"], r["init"]))
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     if a.only_best:
-        jobs = [(r["theta_k"], r["init"]) for r in best_per_theta(a.only_best)]
+        best = best_per_theta(a.only_best)
+        if any(r["n_theta"] != a.n_theta for r in best):
+            raise SystemExit(f"{a.only_best} uses a different theta grid; pass its --n-theta")
+        jobs = [(r["theta_k"], r["init"]) for r in best]
     else:
         jobs = [(k, i) for k in range(a.n_theta) for i in INITS]
     jobs = [j for j in jobs if j not in done]

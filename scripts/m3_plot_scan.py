@@ -6,11 +6,12 @@ Per theta the lowest-energy run wins (``m3_theta_scan.best_per_theta``: ties wit
 the seeds before the random start).
 """
 
+import json
 import sys
 
 import numpy as np
 
-from m3_theta_scan import INITS, best_per_theta
+from m3_theta_scan import best_per_theta, run_params
 
 
 def main(path, png):
@@ -37,8 +38,11 @@ def main(path, png):
     for a in ax:
         for x in (0.25, 0.5, 1.25, 1.873):
             a.axvline(x, color="gray", lw=0.5, ls="--")
-    D = best[0]["D"]
-    fig.suptitle(f"NN BBH, √3×√3, dense, EnvBP, D = {D} (lowest energy of {len(INITS)} starts)")
+    (D, env, warm), = {(r["D"], r["env"], run_params(r)["warm_start"]) for r in best}
+    with open(path) as f:
+        n_starts = len({r["init"] for r in map(json.loads, f)})
+    start = f"warm start from {warm}" if warm else f"lowest energy of {n_starts} starts"
+    fig.suptitle(f"NN BBH, √3×√3, dense, Env{env}, D = {D} ({start})")
     fig.tight_layout()
     fig.savefig(png, dpi=120)
     for r, mi, qi in zip(best, m, Q):
