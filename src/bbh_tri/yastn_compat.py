@@ -179,7 +179,8 @@ def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet
     several symmetry sectors is kept or dropped whole, and (b) in every block the last kept and first
     discarded value differ by more than ``margin`` * (block max), so the SVD backward (which judges
     degeneracy per block, threshold DEGENERACY_RTOL) never sees a kept/discarded degenerate pair.
-    Both are checked at the same cut, so neither undoes the other. Motivation (D = 4, chi = 32): a
+    Both are checked at the same cut, so neither undoes the other. Raises ValueError if no cut
+    above zero qualifies (chi smaller than the leading multiplet). Motivation (D = 4, chi = 32): a
     plain cut through a multiplet made CTM cycle, and tail values ~1e-8 sigma_max closer than
     1e-10 sigma_max straddled the tol cut and failed the gradient.
     """
@@ -208,8 +209,12 @@ def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet
                     return False
             return True
 
+        k0 = k
         while not ok(k):
             k -= 1
+        if k == 0 and k0 > 0:  # an empty projector would give a zero-dimensional environment
+            raise ValueError(f"gap_safe_truncation: no admissible cut within D_total = {D_total} (the leading "
+                             f"multiplet or near-degenerate group is larger); increase chi")
         mask = S.copy()
         mask._data = mask._data > float("inf")  # all False, backend-native bool
         if k:

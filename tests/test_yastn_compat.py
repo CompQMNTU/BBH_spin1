@@ -319,3 +319,11 @@ def test_multiplet_safe_cut_stops_ctm_cycle():
                               truncation_f=gap_safe_truncation(0.0, 32, eps_multiplet=1e-6))
     assert not plain.converged  # two-cycle: corner spectra change by ~2.5e-2 and ~1e-4 on alternate sweeps
     assert safe.converged
+
+
+def test_gap_safe_truncation_raises_when_chi_is_below_the_leading_multiplet():
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(): [1.0, 1.0, 0.1]})
+    with pytest.raises(ValueError, match="increase chi"):
+        gap_safe_truncation(0.0, 1, eps_multiplet=1e-6)(S)
+    assert int(np.sum(gap_safe_truncation(0.0, 2, eps_multiplet=1e-6)(S).to_numpy())) == 2
