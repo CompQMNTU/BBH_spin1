@@ -170,37 +170,50 @@ def svd_backward(ctx, gu, gsigma, gvh):
 
 
 def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet=None):
-    """CTM projector mask (``EnvCTM.iterate_(truncation_f=...)``) that never cuts a near-degenerate
-    pair. yastn's mask (relative ``tol``, at most ``D_total`` values across blocks) is applied first;
-    then, in each block, values are dropped from the bottom of the kept set until the last kept and
-    the first discarded value differ by more than ``margin`` * (block max). With the default margin,
-    10x the threshold of :func:`svd_backward`, no kept/discarded pair counts as degenerate there.
-    ``eps_multiplet``: start instead from yastn's ``truncation_mask_multiplets``, which moves the
-    global cut (across blocks) to a relative gap > eps_multiplet, so a multiplet spread over several
-    symmetry sectors is kept or dropped whole (a cut through one made CTM oscillate at D = 4).
-    Needed because the CTM tail (sigma ~ tol * sigma_max) is dense: at D = 4, chi = 32 neighbors at
-    1e-8 sigma_max closer than 1e-10 sigma_max straddled the cut and failed the gradient.
-    """
-    import yastn
+    """CTM projector mask (``EnvCTM.iterate_(truncation_f=...)``) that cuts neither a multiplet nor a
+    near-degenerate pair.
 
+    The kept set is a prefix of the globally sorted spectrum (all blocks), starting at
+    min(#values > tol * max, D_total); the cut moves down until (a) the relative gap between the last
+    kept and first discarded value exceeds ``eps_multiplet`` (if given), so a multiplet spread over
+    several symmetry sectors is kept or dropped whole, and (b) in every block the last kept and first
+    discarded value differ by more than ``margin`` * (block max), so the SVD backward (which judges
+    degeneracy per block, threshold DEGENERACY_RTOL) never sees a kept/discarded degenerate pair.
+    Both are checked at the same cut, so neither undoes the other. Motivation (D = 4, chi = 32): a
+    plain cut through a multiplet made CTM cycle, and tail values ~1e-8 sigma_max closer than
+    1e-10 sigma_max straddled the tol cut and failed the gradient.
+    """
     def mask_f(S):
-        if eps_multiplet is None:
-            mask = yastn.linalg.truncation_mask(S, tol=tol, D_total=D_total)
-        else:
-            mask = yastn.linalg.truncation_mask_multiplets(S, tol=tol, D_total=D_total, eps_multiplet=eps_multiplet)
         be = S.config.backend
-        for sl in S.slices:
-            sls = slice(*sl.slcs[0])
-            s, m = be.to_numpy(S.data[sls]), be.to_numpy(mask._data[sls])
-            k = int(m.sum())
-            if k == 0 or k == len(s):
-                continue
-            order = np.argsort(-s, kind="stable")
-            ss = s[order]
-            while k > 0 and ss[k - 1] - ss[k] <= margin * ss[0]:
-                k -= 1
-            if k < int(m.sum()):
-                mask._data[sls][order[k:].tolist()] = False  # list index: numpy and torch
+        s = np.asarray(be.to_numpy(S.data), dtype=float)
+        block = np.empty(len(s), dtype=int)
+        bmax = []
+        for b, sl in enumerate(S.slices):
+            lo, hi = sl.slcs[0]
+            block[lo:hi] = b
+            bmax.append(s[lo:hi].max() if hi > lo else 0.0)
+        order = np.argsort(-s, kind="stable")
+        ss, bb = s[order], block[order]
+        k = min(int(np.sum(ss > tol * ss[0])) if len(ss) else 0, D_total)
+
+        def ok(k):
+            if k == 0 or k == len(ss):
+                return True
+            if eps_multiplet is not None and ss[k - 1] - ss[k] <= eps_multiplet * ss[k - 1]:
+                return False
+            for b in set(bb[:k].tolist()) & set(bb[k:].tolist()):
+                last_kept = ss[:k][bb[:k] == b].min()
+                first_dropped = ss[k:][bb[k:] == b].max()
+                if last_kept - first_dropped <= margin * bmax[b]:
+                    return False
+            return True
+
+        while not ok(k):
+            k -= 1
+        mask = S.copy()
+        mask._data = mask._data > float("inf")  # all False, backend-native bool
+        if k:
+            mask._data[order[:k].tolist()] = True  # list index: numpy and torch
         return mask
     return mask_f
 

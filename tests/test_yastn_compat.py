@@ -278,6 +278,18 @@ def test_gap_safe_truncation_keeps_multiplets_across_blocks():
     assert count(plain) == 3 and count(safe) == 2
 
 
+def test_gap_safe_truncation_block_backoff_keeps_cross_block_multiplet():
+    """Codex counterexample (PR #10): blocks A = [1, 2e-8, 1.995e-8], B = [2e-8], tol 1e-8, chi 3.
+    A per-block backoff after the global multiplet cut dropped A's 2e-8 but kept B's, splitting the
+    exact doublet. With both conditions checked at one global cut, the doublet goes together."""
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(0,): [1.0, 2e-8, 1.995e-8], (1,): [2e-8]}, sym="U1")
+    mask = gap_safe_truncation(1e-8, 3, eps_multiplet=1e-6)(S)
+    kept = {t[0]: sorted(np.asarray(S[t]).ravel()[np.asarray(mask[t]).ravel()].tolist()) for t in S.struct.t}
+    assert kept[1] == [x for x in kept[0] if x == 2e-8]  # the doublet is kept or dropped whole
+    assert kept == {0: [1.0], 1: []}  # here dropped: keeping it would split A's 2e-8 / 1.995e-8 pair
+
+
 def _cycle_state():
     """D = 4 state at theta = pi/4 (dense copy of a U1xU1 AD line-search trial point, M4) on which
     CTM with a plain chi = 32 cut cycles between two truncations of a multiplet."""
