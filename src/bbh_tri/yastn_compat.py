@@ -14,6 +14,8 @@
 import contextlib
 import warnings
 
+import numpy as np
+
 import yastn.tn.fpeps as fpeps
 
 # Pairs with |sigma_i - sigma_j| <= DEGENERACY_RTOL * sigma_max(block) are numerically degenerate.
@@ -165,6 +167,42 @@ def svd_backward(ctx, gu, gsigma, gvh):
                       " * sigma_max of the block), zero or underflowing singular values, or the result is not finite;"
                       " the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
     return dA, None, None, None
+
+
+def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet=None):
+    """CTM projector mask (``EnvCTM.iterate_(truncation_f=...)``) that never cuts a near-degenerate
+    pair. yastn's mask (relative ``tol``, at most ``D_total`` values across blocks) is applied first;
+    then, in each block, values are dropped from the bottom of the kept set until the last kept and
+    the first discarded value differ by more than ``margin`` * (block max). With the default margin,
+    10x the threshold of :func:`svd_backward`, no kept/discarded pair counts as degenerate there.
+    ``eps_multiplet``: start instead from yastn's ``truncation_mask_multiplets``, which moves the
+    global cut (across blocks) to a relative gap > eps_multiplet, so a multiplet spread over several
+    symmetry sectors is kept or dropped whole (a cut through one made CTM oscillate at D = 4).
+    Needed because the CTM tail (sigma ~ tol * sigma_max) is dense: at D = 4, chi = 32 neighbors at
+    1e-8 sigma_max closer than 1e-10 sigma_max straddled the cut and failed the gradient.
+    """
+    import yastn
+
+    def mask_f(S):
+        if eps_multiplet is None:
+            mask = yastn.linalg.truncation_mask(S, tol=tol, D_total=D_total)
+        else:
+            mask = yastn.linalg.truncation_mask_multiplets(S, tol=tol, D_total=D_total, eps_multiplet=eps_multiplet)
+        be = S.config.backend
+        for sl in S.slices:
+            sls = slice(*sl.slcs[0])
+            s, m = be.to_numpy(S.data[sls]), be.to_numpy(mask._data[sls])
+            k = int(m.sum())
+            if k == 0 or k == len(s):
+                continue
+            order = np.argsort(-s, kind="stable")
+            ss = s[order]
+            while k > 0 and ss[k - 1] - ss[k] <= margin * ss[0]:
+                k -= 1
+            if k < int(m.sum()):
+                mask._data[sls][order[k:].tolist()] = False  # list index: numpy and torch
+        return mask
+    return mask_f
 
 
 def patch_svd_backward():

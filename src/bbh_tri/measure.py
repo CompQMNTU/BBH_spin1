@@ -22,11 +22,16 @@ from .hamiltonian import energy_per_site
 RDM_CLASSES = ("h", "v", "d", "nnn_d")
 
 
-def ctm_env(psi, chi, corner_tol=1e-12, max_sweeps=200):
-    """CTM environment (method '2x2', h/v moves) iterated to corner convergence (SPEC §4.3)."""
+def ctm_env(psi, chi, corner_tol=1e-12, max_sweeps=200, truncation_f=None, return_info=False):
+    """CTM environment (method '2x2', h/v moves) iterated to corner convergence (SPEC §4.3).
+
+    ``truncation_f``: custom projector mask (e.g. ``yastn_compat.gap_safe_truncation``);
+    ``return_info``: return (env, CTMRG_out) to see whether the corners converged.
+    """
     env = fpeps.EnvCTM(psi, init="eye")
-    env.iterate_(opts_svd={"D_total": chi}, moves="hv", method="2x2", max_sweeps=max_sweeps, corner_tol=corner_tol)
-    return env
+    info = env.iterate_(opts_svd={"D_total": chi}, moves="hv", method="2x2", max_sweeps=max_sweeps,
+                        corner_tol=corner_tol, truncation_f=truncation_f)
+    return (env, info) if return_info else env
 
 
 def bond_rdm(psi, env, bond, cls):

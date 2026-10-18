@@ -24,7 +24,7 @@ import yastn
 import yastn.tn.fpeps as fpeps
 
 from . import lattice, measure, operators
-from .yastn_compat import DegenerateSVDWarning, exact_svd_backward, peps_to_dict, zeroed_pairs
+from .yastn_compat import DegenerateSVDWarning, exact_svd_backward, gap_safe_truncation, peps_to_dict, zeroed_pairs
 
 # Raised by a loss evaluation that cannot be trusted; the chain perturbs and retries (§6).
 RECOVERABLE = (DegenerateSVDWarning, FloatingPointError)
@@ -110,7 +110,9 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
 class Chain:
     """L-BFGS optimization of the site tensors of ``psi`` (torch config) for ``model``.
 
-    CTM: method '2x2', bond dimension ``chi``, ``corner_tol``, ``max_sweeps``; ``svd_tol`` must be > 0
+    CTM: method '2x2', bond dimension ``chi``, ``corner_tol``, ``max_sweeps``; projectors truncated by
+    ``yastn_compat.gap_safe_truncation`` (multiplets with relative splitting < ``eps_multiplet`` are
+    kept or dropped whole: at D = 4 a cut through one made CTM cycle); ``svd_tol`` must be > 0
     and well above roundoff (kept exact zeros give undetectable wrong gradients; a cut among
     roundoff-level values warns as a degenerate pair). ``kept_degenerate``: see
     ``yastn_compat._KEPT_DEGENERATE``. ``ad``: 'unrolled' or 'fp' (see :meth:`loss`). Each
@@ -122,7 +124,7 @@ class Chain:
     """
 
     def __init__(self, psi, model, ops, chi, corner_tol=1e-9, max_sweeps=500, svd_tol=1e-8,
-                 eps_multiplet=None, kept_degenerate="zero", ad="unrolled", history=20, lr=1.0, max_ls=20,
+                 eps_multiplet=1e-6, kept_degenerate="zero", ad="unrolled", history=20, lr=1.0, max_ls=20,
                  fd_check_every=10, fd_rtol=1e-3, checkpoint=None, log=None):
         import torch
         self.torch = torch
@@ -139,6 +141,9 @@ class Chain:
             opts_svd["eps_multiplet"] = eps_multiplet
         self.ctm_fwd = {"method": "2x2", "corner_tol": corner_tol, "max_sweeps": max_sweeps,
                         "use_qr": False, "opts_svd": opts_svd}
+        # unrolled AD: the cut keeps or drops multiplets whole (relative gap eps_multiplet, across
+        # blocks) and never splits a near-degenerate pair within a block (yastn_compat.gap_safe_truncation)
+        self.truncation_f = gap_safe_truncation(svd_tol, chi, eps_multiplet=eps_multiplet)
         # One L-BFGS iteration per step(). torch caps the line search at max_eval - 1 evaluations and
         # max_eval defaults to 5 * max_iter // 4 = 1, which leaves no zoom (t = 0 whenever t = 1 is
         # uphill). torch also stops on |g|_max <= tolerance_grad or g.d > -tolerance_change (absolute,
@@ -189,7 +194,7 @@ class Chain:
         else:
             o = self.ctm_fwd
             info = env.iterate_(opts_svd=o["opts_svd"], method=o["method"], max_sweeps=o["max_sweeps"],
-                                corner_tol=o["corner_tol"], use_qr=o["use_qr"])
+                                corner_tol=o["corner_tol"], use_qr=o["use_qr"], truncation_f=self.truncation_f)
             if not info.converged:
                 raise NoFixedPointError(code=1, message=f"CTM not converged: {info}")
         self.n_evals += 1
@@ -360,18 +365,22 @@ class Chain:
         return self
 
 
-def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500):
+def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500, eps_multiplet=1e-6):
     """Re-measure a (numpy) PEPS at each chi in ``chis`` (docs/ad_workflow.md §4).
 
-    Returns {"energies": {chi: E}, "class_energies": {chi: {...}}, "order": {site: (m, |Q|)} at
-    the largest chi, "c3_spread": max - min of the h/v/d class energies at the largest chi}.
+    CTM truncation keeps multiplets whole (``gap_safe_truncation``), so the effective chi can be a
+    little below the nominal one. Returns {"energies": {chi: E}, "class_energies": {chi: {...}},
+    "ctm_converged": {chi: bool}, "order": {site: (m, |Q|)} at the largest chi, "c3_spread": max - min
+    of the h/v/d class energies at the largest chi}.
     """
     ops = operators.spin1(psi[psi.sites()[0]].config.sym.SYM_ID)
-    out = {"energies": {}, "class_energies": {}}
+    out = {"energies": {}, "class_energies": {}, "ctm_converged": {}}
     for chi in sorted(chis):  # the diagnostics below use the last (largest) chi
-        env = measure.ctm_env(psi, chi, corner_tol=corner_tol, max_sweeps=max_sweeps)
+        env, info = measure.ctm_env(psi, chi, corner_tol=corner_tol, max_sweeps=max_sweeps, return_info=True,
+                                    truncation_f=gap_safe_truncation(0.0, chi, eps_multiplet=eps_multiplet))
         E, by_class = measure.energy(psi, env, ops, model)
         out["energies"][chi], out["class_energies"][chi] = E, by_class
+        out["ctm_converged"][chi] = bool(info.converged)
     nn = [by_class[c] for c in ("h", "v", "d") if c in by_class]
     out["c3_spread"] = max(nn) - min(nn)
     out["order"] = {tuple(s): tuple(map(float, v)) for s, v in measure.order_parameters(psi, env, ops).items()}

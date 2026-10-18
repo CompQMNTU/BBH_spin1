@@ -99,6 +99,13 @@ Setup: θ = π/4, √3×√3, dense, D = 3 EnvBP states, χ = 18, loss = E/site 
 - **`fp_ctmrg` (implicit fixed-point backward) can be wrong on such a state.** On a fully converged D = 3 EnvBP state it missed FD by a factor 10 (AD 0.145 vs FD 0.0144; AD also changed with `corner_tol`, FD did not), with or without zeroing. On a less converged D = 3 state with the same degeneracy it was right (3e-6). Presumably the gauge fixing of the fixed point is not unique on a degenerate spectrum. Not pinned by a canary (no cheap reproducer); the driver defaults to `ad="unrolled"`.
 - **`fp_ctmrg` forward at `corner_tol = 1e-10`** did not converge in 500 sweeps on the D = 3 state (`NoFixedPointError`); 1e-9 does.
 
+## CTM truncation at D = 4: cut through a multiplet (M4, 2026-10-18)
+
+Two AD chains at θ = π/4, D = 4, χ = 32 stopped after 4 failed steps each, both at line-search trial points (reproduced from the checkpoints):
+- **U1×U1:** CTM never converged; the corner spectra alternated with max_dsv ≈ 0.028 for 500 sweeps (`NoFixedPointError`). The same state in dense cycles too (2.5e-2 / 1e-4 on alternate sweeps), so it is not a symmetry artifact. χ = 48 or 64, or `tol` = 1e-6, converge in 11 sweeps (E changes by 7e-6). The χ = 32 cut falls inside a multiplet that spans several symmetry sectors, and the CTM alternates between keeping one part or the other.
+- **Dense:** the gradient warned: singular values near the `tol` = 1e-8 cut (≈1e-8 σ_max) are closer than 1e-10 σ_max, so the cut kept one member of a near-degenerate pair and discarded the other.
+- **Fix:** `yastn_compat.gap_safe_truncation(tol, chi, eps_multiplet)`, passed as `EnvCTM.iterate_(truncation_f=...)`. It starts from yastn's `truncation_mask_multiplets` (global cut moved to a relative gap > eps_multiplet), then lowers the cut within each block until the gap to the first discarded value exceeds 10 × the backward's degeneracy threshold. On the trial points: CTM converges in 11 sweeps for eps_multiplet = 1e-6…1e-3 (29–31 states kept), and the dense gradient no longer warns (E unchanged to 1e-14). `Chain` (default `eps_multiplet` = 1e-6) and `validate` use it; `validate` now reports `ctm_converged` per χ. Regression: `tests/test_yastn_compat.py::test_multiplet_safe_cut_stops_ctm_cycle` (fixture `tests/data/d4_pi4_ctm_cycle.npz`).
+
 ## NTU: default initialization keeps metric-null junk on path gates (M3 follow-up, 2026-10-18)
 
 - **Symptom:** NTU warm-started from exact FM states (θ = 0.7π, D = 4, τ = 0.01) drifted up by 2.6e-4 over 400 steps; per-step truncation error grew from 5e-6 to 2e-4 (EnvBP: 5e-11).
