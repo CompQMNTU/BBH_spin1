@@ -14,6 +14,8 @@
 import contextlib
 import warnings
 
+import numpy as np
+
 import yastn.tn.fpeps as fpeps
 
 # Pairs with |sigma_i - sigma_j| <= DEGENERACY_RTOL * sigma_max(block) are numerically degenerate.
@@ -165,6 +167,60 @@ def svd_backward(ctx, gu, gsigma, gvh):
                       " * sigma_max of the block), zero or underflowing singular values, or the result is not finite;"
                       " the result is unreliable.", DegenerateSVDWarning, stacklevel=2)
     return dA, None, None, None
+
+
+def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet=None):
+    """CTM projector mask (``EnvCTM.iterate_(truncation_f=...)``) that cuts neither a multiplet nor a
+    near-degenerate pair.
+
+    The kept set is a prefix of the globally sorted spectrum (all blocks), starting at
+    min(#values > tol * max, D_total); the cut moves down until (a) the relative gap between the last
+    kept and first discarded value exceeds ``eps_multiplet`` (if given), so a multiplet spread over
+    several symmetry sectors is kept or dropped whole, and (b) in every block the last kept and first
+    discarded value differ by more than ``margin`` * (block max), so the SVD backward (which judges
+    degeneracy per block, threshold DEGENERACY_RTOL) never sees a kept/discarded degenerate pair.
+    Both are checked at the same cut, so neither undoes the other. Raises ValueError if no cut
+    above zero qualifies (chi smaller than the leading multiplet). Motivation (D = 4, chi = 32): a
+    plain cut through a multiplet made CTM cycle, and tail values ~1e-8 sigma_max closer than
+    1e-10 sigma_max straddled the tol cut and failed the gradient.
+    """
+    def mask_f(S):
+        be = S.config.backend
+        s = np.asarray(be.to_numpy(S.data), dtype=float)
+        block = np.empty(len(s), dtype=int)
+        bmax = []
+        for b, sl in enumerate(S.slices):
+            lo, hi = sl.slcs[0]
+            block[lo:hi] = b
+            bmax.append(s[lo:hi].max() if hi > lo else 0.0)
+        order = np.argsort(-s, kind="stable")
+        ss, bb = s[order], block[order]
+        k = min(int(np.sum(ss > tol * ss[0])) if len(ss) else 0, D_total)
+
+        def ok(k):
+            if k == 0 or k == len(ss):
+                return True
+            if eps_multiplet is not None and ss[k - 1] - ss[k] <= eps_multiplet * ss[k - 1]:
+                return False
+            for b in set(bb[:k].tolist()) & set(bb[k:].tolist()):
+                last_kept = ss[:k][bb[:k] == b].min()
+                first_dropped = ss[k:][bb[k:] == b].max()
+                if last_kept - first_dropped <= margin * bmax[b]:
+                    return False
+            return True
+
+        k0 = k
+        while not ok(k):
+            k -= 1
+        if k == 0 and k0 > 0:  # an empty projector would give a zero-dimensional environment
+            raise ValueError(f"gap_safe_truncation: no admissible cut within D_total = {D_total} (the leading "
+                             f"multiplet or near-degenerate group is larger); increase chi")
+        mask = S.copy()
+        mask._data = mask._data > float("inf")  # all False, backend-native bool
+        if k:
+            mask._data[order[:k].tolist()] = True  # list index: numpy and torch
+        return mask
+    return mask_f
 
 
 def patch_svd_backward():

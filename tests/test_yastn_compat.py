@@ -245,3 +245,85 @@ def test_zero_mode_error_is_not_bounded_by_pair_size():
         (R[1, 2] + R[2, 1]).backward()
     assert (A.grad[1, 2] + A.grad[2, 1]).item() == pytest.approx(0.0, abs=1e-12)  # exact: 2
     assert zeroed_pairs() - z0 == 1
+
+
+def _diag(blocks, sym="dense"):
+    """Diagonal yastn tensor (numpy) with the given values per charge block."""
+    import yastn
+    cfg = yastn.make_config(sym=sym)
+    S = yastn.Tensor(config=cfg, s=(1, -1), isdiag=True)
+    for t, v in blocks.items():
+        S.set_block(ts=t, Ds=len(v), val=np.asarray(v, dtype=float))
+    return S
+
+
+def test_gap_safe_truncation_never_cuts_a_near_degenerate_pair():
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(): [1.0, 0.3, 1e-3, 1e-8 + 5e-11, 1e-8, 1e-9]})
+    import yastn
+    assert int(np.sum(yastn.linalg.truncation_mask(S, tol=0, D_total=4).to_numpy())) == 4  # plain cut splits the pair
+    assert int(np.sum(gap_safe_truncation(0.0, 4)(S).to_numpy())) == 3  # drops the whole pair
+    assert int(np.sum(gap_safe_truncation(0.0, 5)(S).to_numpy())) == 5  # cut below the pair: unchanged
+
+
+def test_gap_safe_truncation_keeps_multiplets_across_blocks():
+    """A doublet split over two U1 sectors at the cut: plain truncation keeps one member, the
+    multiplet-aware mask keeps or drops both."""
+    import yastn
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(0,): [1.0, 0.2], (1,): [0.5, 0.2 * (1 + 1e-9)], (-1,): [0.05]}, sym="U1")
+    plain = yastn.linalg.truncation_mask(S, tol=0, D_total=3)
+    safe = gap_safe_truncation(0.0, 3, eps_multiplet=1e-6)(S)
+    count = lambda m: sum(int(np.sum(m[t])) for t in m.struct.t)
+    assert count(plain) == 3 and count(safe) == 2
+
+
+def test_gap_safe_truncation_block_backoff_keeps_cross_block_multiplet():
+    """Codex counterexample (PR #10): blocks A = [1, 2e-8, 1.995e-8], B = [2e-8], tol 1e-8, chi 3.
+    A per-block backoff after the global multiplet cut dropped A's 2e-8 but kept B's, splitting the
+    exact doublet. With both conditions checked at one global cut, the doublet goes together."""
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(0,): [1.0, 2e-8, 1.995e-8], (1,): [2e-8]}, sym="U1")
+    mask = gap_safe_truncation(1e-8, 3, eps_multiplet=1e-6)(S)
+    kept = {t[0]: sorted(np.asarray(S[t]).ravel()[np.asarray(mask[t]).ravel()].tolist()) for t in S.struct.t}
+    assert kept[1] == [x for x in kept[0] if x == 2e-8]  # the doublet is kept or dropped whole
+    assert kept == {0: [1.0], 1: []}  # here dropped: keeping it would split A's 2e-8 / 1.995e-8 pair
+
+
+def _cycle_state():
+    """D = 4 state at theta = pi/4 (dense copy of a U1xU1 AD line-search trial point, M4) on which
+    CTM with a plain chi = 32 cut cycles between two truncations of a multiplet."""
+    import os
+    import yastn
+    import yastn.tn.fpeps as fpeps
+    from bbh_tri import lattice, operators
+    data = np.load(os.path.join(os.path.dirname(__file__), "data", "d4_pi4_ctm_cycle.npz"))
+    cfg = operators.spin1("dense").config
+    geo = lattice.geometry("sqrt3")
+    tensors = {}
+    for k, s in enumerate(geo.sites()):
+        a = data[f"s{k}"]
+        T = yastn.Tensor(config=cfg, s=(-1, 1, 1, -1, 1, -1))
+        T.set_block(val=a, Ds=a.shape)
+        tensors[s] = T.fuse_legs(axes=(0, 1, 2, 3, (4, 5)))
+    return fpeps.Peps(geo, tensors=tensors)
+
+
+@pytest.mark.slow
+def test_multiplet_safe_cut_stops_ctm_cycle():
+    from bbh_tri import measure
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    psi = _cycle_state()
+    _, plain = measure.ctm_env(psi, 32, corner_tol=1e-9, max_sweeps=60, return_info=True)
+    _, safe = measure.ctm_env(psi, 32, corner_tol=1e-9, max_sweeps=60, return_info=True,
+                              truncation_f=gap_safe_truncation(0.0, 32, eps_multiplet=1e-6))
+    assert not plain.converged  # two-cycle: corner spectra change by ~2.5e-2 and ~1e-4 on alternate sweeps
+    assert safe.converged
+
+
+def test_gap_safe_truncation_raises_when_chi_is_below_the_leading_multiplet():
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    S = _diag({(): [1.0, 1.0, 0.1]})
+    with pytest.raises(ValueError, match="increase chi"):
+        gap_safe_truncation(0.0, 1, eps_multiplet=1e-6)(S)
+    assert int(np.sum(gap_safe_truncation(0.0, 2, eps_multiplet=1e-6)(S).to_numpy())) == 2
