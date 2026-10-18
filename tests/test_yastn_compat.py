@@ -16,10 +16,10 @@ def ops():
     return spin1("dense")
 
 
-def _compat_svd(spectrum, keep, seed=0):
+def _compat_svd(spectrum, keep, seed=0, kept_degenerate="warn"):
     """(AD, FD, number of DegenerateSVDWarnings) with the patched SVD backward."""
     from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
-    with exact_svd_backward(), warnings.catch_warnings(record=True) as w:
+    with exact_svd_backward(kept_degenerate), warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always", DegenerateSVDWarning)
         ad, fd = svd_directional_derivative(spectrum, keep, seed=seed)
     return ad, fd, sum(issubclass(x.category, DegenerateSVDWarning) for x in w)
@@ -204,3 +204,44 @@ def test_active_pair_with_overflowing_gap_warns():
     but 1/gap overflows and would be dropped silently (AD 0 vs true 1 for L = R01 + R10)."""
     _, n_warn = _diag_svd_grad([1e-307, 9.9e-308], 2, 0, lambda R, P: R[0, 1] + R[1, 0])
     assert n_warn > 0
+
+
+@pytest.mark.ad
+@pytest.mark.parametrize("seed", range(2))
+def test_zero_mode_drops_small_kept_degenerate_pair(seed):
+    """kept_degenerate='zero': a kept pair at 1e-4 sigma_max is zeroed; the dropped 0/0 term costs
+    ~1e-5 relative on this loss (it depends on how the pair splits)."""
+    ad, fd, n_warn = _compat_svd([1, .5, .3, 1e-4, 1e-4, 1e-5], keep=5, seed=seed, kept_degenerate="zero")
+    assert n_warn == 0
+    assert ad == pytest.approx(fd, rel=1e-4)
+
+
+@pytest.mark.ad
+@pytest.mark.parametrize("spectrum,keep", [([1, .7, .7, .3, .2, .1], 4),     # large kept pair
+                                           ([1, .5, 1e-4, 1e-4, 1e-5], 3)])  # small pair straddling the cut
+def test_zero_mode_still_warns_for_large_or_straddling_pairs(spectrum, keep):
+    _, _, n_warn = _compat_svd(spectrum, keep=keep, kept_degenerate="zero")
+    assert n_warn > 0
+
+
+@pytest.mark.ad
+def test_zero_mode_error_is_not_bounded_by_pair_size():
+    """Codex counterexample (PR #8): the dropped term is the loss's sensitivity to mixing within the
+    pair, O(1) here although the pair is at 1e-4. L = R[1,2] + R[2,1] of the reconstruction R = U S Vh
+    of diag(1, 1e-4, 1e-4) has derivative 2 along dA[1,2] = dA[2,1] = 1; the zero mode gives 0
+    (silently, which is why Chain FD-checks gradients after zeroing) and counts the pair."""
+    import torch
+    import yastn
+    from bbh_tri.yastn_compat import exact_svd_backward, zeroed_pairs
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    A = torch.diag(torch.tensor([1.0, 1e-4, 1e-4], dtype=torch.float64)).requires_grad_()
+    T = yastn.Tensor(config=cfg, s=(1, -1))
+    T.set_block(val=A, Ds=(3, 3))
+    z0 = zeroed_pairs()
+    with exact_svd_backward("zero"), warnings.catch_warnings():
+        warnings.simplefilter("error")
+        U, S, V = yastn.linalg.svd(T, axes=(0, 1))
+        R = (U @ S @ V).to_dense()
+        (R[1, 2] + R[2, 1]).backward()
+    assert (A.grad[1, 2] + A.grad[2, 1]).item() == pytest.approx(0.0, abs=1e-12)  # exact: 2
+    assert zeroed_pairs() - z0 == 1

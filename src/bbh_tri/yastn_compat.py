@@ -30,6 +30,28 @@ import yastn.tn.fpeps as fpeps
 DEGENERACY_RTOL = 1e-10
 
 
+# How svd_backward treats a near-degenerate pair whose two singular vectors BOTH receive gradient
+# (both kept): "warn" (default) or "zero". "zero" drops the pair's 1/(sigma_i - sigma_j) term, whose
+# true value is a 0/0 limit (it vanishes only if the loss does not depend on how the pair splits).
+# The error is NOT bounded by the pair's size: it is the loss's sensitivity to mixing within the
+# pair, which can be O(1) however small the pair is (e.g. L = R[1,2] + R[2,1] of the reconstruction
+# R = U S Vh of diag(1, 1e-4, 1e-4): exact derivative 2 along dA[1,2] = dA[2,1] = 1, zero mode 0;
+# test_yastn_compat.py). Measured: generic loss, rel. error 1e-2 for a pair at 0.7 sigma_max, ~5e-6 at
+# 1e-4; CTM energy at D = 3 with a pair at 2e-4 sigma_max: 2e-8 (test_variational.py). It is
+# therefore an empirical approximation: only pairs at sigma <= ZERO_MAX_SIGMA * sigma_max of the block
+# are zeroed (larger kept pairs, and pairs straddling the cut, still warn), every zeroed pair is
+# counted (:func:`zeroed_pairs`), and ``variational.Chain`` checks its gradient against finite
+# differences whenever pairs were zeroed.
+_KEPT_DEGENERATE = "warn"
+ZERO_MAX_SIGMA = 1e-3
+_ZEROED_PAIRS = 0
+
+
+def zeroed_pairs():
+    """Number of degenerate pairs zeroed by ``kept_degenerate='zero'`` since import (monotonic)."""
+    return _ZEROED_PAIRS
+
+
 class DegenerateSVDWarning(RuntimeWarning):
     """Near-degenerate singular values contribute to an SVD gradient, which is then unreliable."""
 
@@ -94,7 +116,17 @@ def svd_backward(ctx, gu, gsigma, gvh):
     # numerically degenerate, or whose sigma, gap or sum has no usable reciprocal, makes the result
     # unreliable.
     near_degenerate = diff.abs() <= DEGENERACY_RTOL * sigma.max()
-    bad = (pair_active & (near_degenerate | _unsafe(diff) | _unsafe(tot))).any() or (_unsafe(sigma) & active).any()
+    if _KEPT_DEGENERATE == "zero":
+        small = sigma <= ZERO_MAX_SIGMA * sigma.max()
+        both = (near_degenerate & ~eye & active.unsqueeze(-2) & active.unsqueeze(-1)
+                & small.unsqueeze(-2) & small.unsqueeze(-1))
+        F = torch.where(both, torch.zeros_like(F), F)
+        global _ZEROED_PAIRS
+        _ZEROED_PAIRS += int(both.sum().item()) // 2
+        checked = pair_active & ~both  # a zeroed pair is exempt, also when its gap is exactly 0
+    else:
+        checked = pair_active
+    bad = (checked & (near_degenerate | _unsafe(diff) | _unsafe(tot))).any() or (_unsafe(sigma) & active).any()
 
     uh = u.conj().transpose(-2, -1)
     if gu is not None:
@@ -147,12 +179,20 @@ def patch_svd_backward():
 
 
 @contextlib.contextmanager
-def exact_svd_backward():
-    """Context manager form of :func:`patch_svd_backward`; backward() must run inside it."""
-    undo = patch_svd_backward()
+def exact_svd_backward(kept_degenerate="warn"):
+    """Context manager form of :func:`patch_svd_backward`; backward() must run inside it.
+
+    ``kept_degenerate``: "warn" or "zero", see ``_KEPT_DEGENERATE``.
+    """
+    global _KEPT_DEGENERATE
+    if kept_degenerate not in ("warn", "zero"):
+        raise ValueError(kept_degenerate)
+    undo, previous = patch_svd_backward(), _KEPT_DEGENERATE
+    _KEPT_DEGENERATE = kept_degenerate
     try:
         yield
     finally:
+        _KEPT_DEGENERATE = previous
         undo()
 
 

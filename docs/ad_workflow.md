@@ -1,6 +1,6 @@
 # Ground-state search by implicit-AD CTM (design)
 
-Status: design for M4 (`src/bbh_tri/variational.py`). Nothing here is implemented or tested yet.
+Status (2026-10-18): implemented in `src/bbh_tri/variational.py` (`Chain`, `validate`, `pad`, `convert`) and `scripts/m4_variational.py`; tests in `tests/test_variational.py`. Deviations from the design below are marked **[impl]**. Not yet implemented: warm-started environments, multiplet-aware truncation, Adam fallback, the config/HDF5 layer, symmetric tensors.
 API facts are from yastn `1.6.2.dev320+g7ed8ad0e6`: `envs/fixed_pt.py`, `envs/rdm.py`, and the upstream test `tests/peps/test_fp_tV_complex.py`, which is the reference usage pattern.
 See `docs/yastn_findings.md` for the related M0 results.
 
@@ -48,7 +48,7 @@ Parameters are the raw data `t._data` of the unique site tensors (3 for √3×�
    - `warm` (default after step 0): start from the previous step's converged env with `.detach()` and the new `psi` attached.
    - `dl` / `eye`: cold start, used on retry.
    - Warm start is an untested speed optimization. If it causes trouble, fall back to `dl`, as the upstream test does.
-3. **Fixed point.**
+3. **Fixed point.** **[impl]** Default is `ad="unrolled"`: plain backpropagation through every CTM sweep from `init="eye"` (`env.iterate_`), not `fp_ctmrg`. At D = 3 the CTM SVDs keep an exactly degenerate pair, and the implicit fixed-point gradient was wrong by a factor 10 on one such state (`docs/yastn_findings.md` U4b). `ad="fp"` (below) remains available. Unrolled memory grows with the number of sweeps (fine at D ≤ 3; profile at D ≥ 4). CTM options: `corner_tol` 1e-9 (1e-10 did not converge at D = 3), `max_sweeps` 500, `opts_svd tol` 1e-8.
    ```python
    env = fp_ctmrg(env,
        ctm_opts_fwd={'method': '2x2', 'corner_tol': tol, 'max_sweeps': n, 'use_qr': False,
@@ -88,6 +88,8 @@ The optimizer's energy is measured at χ_opt with `corner_tol`=1e-8. Never repor
 
 ## 5. Gradient quality gate (before any production chain)
 
+**[impl] Status (2026-10-18), production loss (E/site, θ = π/4, χ = 2D²):** D = 2: AD = FD to 1e-5 or better with both `ad="unrolled"` and `"fp"`. D = 3: every gradient hits a kept degenerate pair (σ₁ = σ₂ ≈ 2e-4 σ_max); with `exact_svd_backward(kept_degenerate="zero")` (drops the pair's 0/0 term, only for pairs below 1e-3 σ_max) and `ad="unrolled"`, AD = FD to 2e-8 (no a-priori bound on the dropped term, so `Chain` FD-checks steps that zero a pair). `svd_tol` 1e-10 made a near-roundoff pair straddle the cut (warning); 1e-8 does not. Not yet run: θ ≈ 1.87π.
+
 **Status (2026-10-15): passes with the SVD patch.** With YASTN's own SVD backward, AD missed FD by 2% at χ=8 and 40% at χ=16 (absolute 1e-12 regularizer; `docs/yastn_findings.md` U4). Inside `bbh_tri.yastn_compat.exact_svd_backward()` the error is ~1e-7 at χ = 4–16 (D=2, Sz Sz loss; `tests/test_fp_ctmrg.py`). Every forward and backward pass of the optimizer must run inside that context, with `DegenerateSVDWarning` turned into an error (`warnings.simplefilter('error', DegenerateSVDWarning)`); on that error, treat the step like a `NoFixedPointError` (§6 failure handling) or switch to symmetric tensors. CTM `opts_svd` must have `tol > 0` (kept exact zeros give wrong, undetectable gradients). The checks below still apply to the production loss.
 
 - **Finite-difference check** at θ=π/4, D=2, χ=8, √3×√3, dense float64:
@@ -95,6 +97,13 @@ The optimizer's energy is measured at χ_opt with `corner_tol`=1e-8. Never repor
   - Acceptance: relative error < 1e-4. Also report how many backward steps were taken and whether they stalled.
 - Run the same check at one point near a transition (θ ≈ 1.87π), where CTM converges slowly, to see whether the backward series still converges.
 - If the gate fails, try in order: tighter forward `corner_tol`, larger χ, more backward `max_sweeps`. If it still fails, switch to the commented-out linear-solve backward ("option 2" in `fixed_pt.py`) as a local patch, and record that in `yastn_findings.md`.
+
+## 5b. Optimizer pitfalls **[impl]**
+
+- `torch.optim.LBFGS(max_iter=1)` defaults to `max_eval = 1`, which caps the strong-Wolfe line search at `max_eval - 1 = 0` extra evaluations: whenever the full step t = 1 goes uphill it returns t = 0 and the chain stalls with an unchanged energy. `Chain` sets `max_eval = max_ls + 1` (21).
+- torch's own stopping rules (`tolerance_grad` 1e-7, `tolerance_change` 1e-9, both absolute) fire early: raw-parameter gradients are ~1e-5 near convergence. They are set to 0; `Chain.run` stops on |ΔE| < `tol_E` over `window` steps or |g| < `tol_grad`.
+- torch evaluates the closure at the start of every `step()`, where the previous line search ended; `Chain` caches that evaluation, so a step costs the line-search evaluations only (often 1).
+- The optimizer energy is measured with the truncated CTM of the optimization (`tol` 1e-8 keeps ~D² states). At D = 3 it was 9e-6 below the validated value; always report `validate`.
 
 ## 6. Failure handling
 
@@ -155,3 +164,9 @@ At θ=π/4, √3×√3 cell, dense:
 4. Restart the D=3 chain from a checkpoint and get identical subsequent steps (deterministic resume).
 
 These go into `docs/yastn_findings.md` and the M4 note.
+
+**[impl] Results (2026-10-18), seeds from EnvBP runs started at random product states:**
+1. Gradient gate: see §5.
+2. D = 2 (EnvBP 1.8401083, χ_opt 8): AD converges to 1.8401000 in 7 steps (a local minimum next to the BP state; the anisotropic 1.8795 state of the sanity run was not used).
+3. D = 3 (EnvBP 1.68853 at χ = 18, `tol` 1e-8; 1.68856 in the sanity run), χ_opt = 18: converged in 26 L-BFGS steps (~2 s each). Optimizer energy 1.6740229; validated 1.6740229 / 1.6740321 / 1.6740320 at χ = 9 / 18 / 27, i.e. **1.67403**, 0.0145 below EnvBP and converged in χ. C₃: h, v = 0.55742, d = 0.55920 (spread 1.8e-3). m = 0.47, 0.60, 0.47 and |Q| = 0.59, 0.46, 0.59 per sublattice.
+4. Resume: `test_chain_lowers_energy_and_resumes_deterministically` (D = 2) gives bitwise identical steps after reloading a checkpoint.

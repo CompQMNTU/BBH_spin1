@@ -4,16 +4,16 @@ For every theta and initial state (random product, FM, FQ, AFQ, SU3 seeds) evolv
 dimension D and append one JSON line per run to the output file. Runs already in the file are
 skipped, so the scan can be resumed.
 
-    uv run python scripts/m3_theta_scan.py --D 4 --out results/m3_scan_D4.jsonl --workers 40
+    uv run python scripts/m3_theta_scan.py --D 4 --out results/m3_scan_D4.jsonl --workers 16
 
 Warm start (e.g. NTU refinement of the BP phase diagram): ``--only-best SCAN`` keeps, per theta,
 only the lowest-energy start of an earlier scan (``best_per_theta``); ``--save-dir`` pickles the
 final states; ``--from-dir`` starts from such saved states instead of the product states.
 
     uv run python scripts/m3_theta_scan.py --D 4 --only-best results/m3_scan_D4.jsonl \
-        --save-dir states/D4_BP --out results/m3_best_D4_BP.jsonl --workers 40
+        --save-dir states/D4_BP --out results/m3_best_D4_BP.jsonl --workers 16
     uv run python scripts/m3_theta_scan.py --D 4 --env NTU --only-best results/m3_scan_D4.jsonl \
-        --from-dir states/D4_BP --schedule 0.02 0.01 --out results/m3_scan_D4_NTU.jsonl --workers 40
+        --from-dir states/D4_BP --schedule 0.02 0.01 --out results/m3_scan_D4_NTU.jsonl --workers 16
 """
 
 import os
