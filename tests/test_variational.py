@@ -112,16 +112,37 @@ def test_unrolled_gradient_matches_fd_with_kept_degenerate_pair(psi_d3):
     assert ad_val == pytest.approx(fd, rel=1e-6)
 
 
+def test_fd_check_catches_component_orthogonal_to_the_gradient():
+    """Codex counterexample (PR #8): L = eps R[0,0] + R[1,2] + R[2,1] of the reconstruction of
+    A = diag(1, 1e-4, 1e-4). The zero mode keeps only eps along A[0,0] and drops the O(1)
+    off-diagonal part. The check along the gradient alone passes; random directions fail it."""
+    import yastn
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    A = torch.diag(torch.tensor([1.0, 1e-4, 1e-4], dtype=torch.float64)).requires_grad_()
+
+    def L():
+        T = yastn.Tensor(config=cfg, s=(1, -1))
+        T.set_block(val=A, Ds=(3, 3))
+        U, S, V = yastn.linalg.svd(T, axes=(0, 1))
+        R = (U @ S @ V).to_dense()
+        return 1e-3 * R[0, 0] + R[1, 2] + R[2, 1]
+
+    with exact_svd_backward("zero"):
+        L().backward()
+    assert var.fd_check(lambda: L().item(), [A], [A.grad], n_random=0)[0]  # the blind spot
+    ok, checks, tol = var.fd_check(lambda: L().item(), [A], [A.grad], n_random=2)
+    assert not ok
+
+
 @pytest.mark.slow
 def test_chain_fd_checks_gradient_after_zeroing(psi_d3, monkeypatch):
     """A step that zeroes a degenerate pair triggers check_gradient; a mismatch fails the step."""
     ch = chain(psi_d3, 3)
     entry = ch.step()
     assert entry["zeroed_pairs"] > 0
-    ad, fd = entry["fd_check"]
-    assert ad == pytest.approx(fd, rel=1e-3)
+    assert len(entry["fd_check"]) == 3  # gradient + 2 random directions
     ch2 = chain(psi_d3, 3)
-    monkeypatch.setattr(ch2, "check_gradient", lambda: (1.0, 2.0, 0.0))
+    monkeypatch.setattr(ch2, "check_gradient", lambda seed: (False, [(1.0, 2.0)], 0.0))
     with pytest.raises(DegenerateSVDWarning, match="FD check"):
         ch2.step()
 

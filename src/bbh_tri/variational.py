@@ -69,6 +69,42 @@ def energy(psi, env, ops, model):
     return total.real if hasattr(total, "real") else total, e
 
 
+def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise=1e-10, rtol=1e-3):
+    """Compare AD with central differences of ``loss()`` (a float) along the normalized gradient and
+    ``n_random`` random unit directions. Returns (ok, [(AD, FD) per direction], tolerance).
+
+    The random directions are independent of the gradient: a component the gradient lacks entirely
+    (e.g. dropped by the zero mode) is invisible along the gradient itself. Tolerance
+    rtol * |g| + energy_noise / step, the second term being the FD error from an energy converged to
+    ~energy_noise. Parameters are restored afterwards. Complex parameters: AD derivative Re<g, v>.
+    """
+    import torch
+    gnorm = torch.sqrt(sum((g.abs() ** 2).sum() for g in grads))
+    scale = torch.sqrt(sum((p.detach().abs() ** 2).sum() for p in params))
+    eps = rel_eps * scale.item()
+    gen = torch.Generator().manual_seed(seed)
+    dirs = [[g / gnorm for g in grads]]
+    for _ in range(n_random):
+        v = [torch.randn(p.shape, generator=gen, dtype=p.dtype) for p in params]
+        n = torch.sqrt(sum((x.abs() ** 2).sum() for x in v))
+        dirs.append([x / n for x in v])
+    x0 = [p.detach().clone() for p in params]
+    checks = []
+    with torch.no_grad():
+        for v in dirs:
+            vals = []
+            for sgn in (1, -1):
+                for p, q, x in zip(params, x0, v):
+                    p.copy_(q + sgn * eps * x)
+                vals.append(loss())
+            ad = sum((g.conj() * x).sum() for g, x in zip(grads, v)).real.item()
+            checks.append((ad, (vals[0] - vals[1]) / (2 * eps)))
+        for p, q in zip(params, x0):
+            p.copy_(q)
+    tol = rtol * gnorm.item() + energy_noise / eps
+    return all(abs(a - f) <= tol for a, f in checks), checks, tol
+
+
 class Chain:
     """L-BFGS optimization of the site tensors of ``psi`` (torch config) for ``model``.
 
@@ -78,8 +114,9 @@ class Chain:
     ``yastn_compat._KEPT_DEGENERATE``. ``ad``: 'unrolled' or 'fp' (see :meth:`loss`). Each
     :meth:`step` is one L-BFGS iteration (strong-Wolfe line search, usually 1-3 loss evaluations).
     Zeroing a degenerate pair has no a-priori error bound, so after a step that zeroed one,
-    :meth:`check_gradient` compares AD with central differences (first time, then at most every
-    ``fd_check_every`` steps); a relative error above ``fd_rtol`` fails the step.
+    :meth:`check_gradient` compares AD with central differences along the gradient and two random
+    directions (first time, then at most every ``fd_check_every`` steps); a mismatch above
+    ``fd_rtol`` * |g| (plus FD noise) fails the step.
     """
 
     def __init__(self, psi, model, ops, chi, corner_tol=1e-9, max_sweeps=500, svd_tol=1e-8,
@@ -186,11 +223,11 @@ class Chain:
                  "grad_norm": g, "evals": self.n_evals - n0, "zeroed_pairs": zeroed_pairs() - z0}
         if entry["zeroed_pairs"] and (self._last_fd_step is None
                                       or entry["step"] - self._last_fd_step >= self.fd_check_every):
-            ad, fd, noise = self.check_gradient()
-            entry["fd_check"] = (ad, fd)
-            if abs(ad - fd) > self.fd_rtol * abs(ad) + noise:
-                raise DegenerateSVDWarning(f"gradient with zeroed degenerate pairs fails the FD check: "
-                                           f"AD {ad:.6e} vs FD {fd:.6e}")
+            ok, checks, tol = self.check_gradient(seed=entry["step"])
+            entry["fd_check"] = checks
+            if not ok:
+                raise DegenerateSVDWarning(f"gradient with zeroed degenerate pairs fails the FD check "
+                                           f"(tolerance {tol:.2e}): (AD, FD) = {checks}")
             self._last_fd_step = entry["step"]
         entry["time"] = time.time() - t0
         self.history.append(entry)
@@ -201,25 +238,13 @@ class Chain:
             self.save(self.checkpoint)
         return entry
 
-    def check_gradient(self, rel_eps=1e-4, energy_noise=1e-10):
-        """(AD, central FD, FD noise) derivative of the loss along the normalized gradient at the
-        current parameters (AD value = |g|); FD noise = energy_noise / step, the FD error from a CTM
-        energy converged to ~energy_noise. Uses the gradient of the last evaluation, which
-        :meth:`step` leaves at the current point."""
-        grads = self._last[3]
-        gnorm = self.torch.sqrt(sum((g.abs() ** 2).sum() for g in grads))
-        scale = self.torch.sqrt(sum((p.detach().abs() ** 2).sum() for p in self.params))
-        eps = rel_eps * scale.item()
-        x0 = [p.detach().clone() for p in self.params]
-        vals = []
-        with exact_svd_backward(self.kept_degenerate), self.torch.no_grad():
-            for sgn in (1, -1):
-                for p, q, g in zip(self.params, x0, grads):
-                    p.copy_(q + sgn * eps * g / gnorm)
-                vals.append(self.loss()[0].item())
-            for p, q in zip(self.params, x0):
-                p.copy_(q)
-        return gnorm.item(), (vals[0] - vals[1]) / (2 * eps), energy_noise / eps
+    def check_gradient(self, seed=0, n_random=2):
+        """:func:`fd_check` of the loss at the current parameters, with the gradient of the last
+        evaluation (which :meth:`step` leaves at the current point) and tolerance ``fd_rtol``."""
+        def loss():
+            with exact_svd_backward(self.kept_degenerate), self.torch.no_grad():
+                return self.loss()[0].item()
+        return fd_check(loss, self.params, self._last[3], n_random=n_random, seed=seed, rtol=self.fd_rtol)
 
     def perturb(self, noise=1e-3, seed=None):
         """Add noise * rms Gaussian noise to every parameter and reset the L-BFGS history (§6)."""
