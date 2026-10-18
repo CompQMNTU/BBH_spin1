@@ -134,6 +134,27 @@ def test_fd_check_catches_component_orthogonal_to_the_gradient():
     assert not ok
 
 
+def test_fd_check_zero_gradient_and_failing_loss():
+    """A zero gradient keeps only the random directions (no NaN direction); a loss that raises at a
+    trial point leaves the parameters where they were."""
+    x = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    ok, checks, _ = var.fd_check(lambda: float((x ** 2).sum()), [x], [torch.zeros(2, dtype=torch.float64)])
+    assert len(checks) == 2 and not ok  # true gradient (2, 4) is nonzero: caught by random directions
+
+    def boom():
+        raise RuntimeError("no fixed point")
+    with pytest.raises(RuntimeError):
+        var.fd_check(boom, [x], [torch.ones(2, dtype=torch.float64)])
+    assert torch.equal(x, torch.tensor([1.0, 2.0], dtype=torch.float64))
+
+
+def test_chain_start_is_independent_of_tensor_scale():
+    psi = bp_state(2, steps=5)
+    big = fpeps.Peps(psi.geometry, tensors={s: 1e3 * psi[s] for s in psi.sites()})
+    a, b = chain(psi, 2), chain(big, 2)
+    assert all(torch.allclose(p, q, rtol=1e-12, atol=0) for p, q in zip(a.params, b.params))
+
+
 @pytest.mark.slow
 def test_chain_fd_checks_gradient_after_zeroing(psi_d3, monkeypatch):
     """A step that zeroes a degenerate pair triggers check_gradient; a mismatch fails the step."""
@@ -164,6 +185,10 @@ def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
         var.Chain(var.convert(psi, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=9).load(str(ck))
     with pytest.raises(ValueError, match="checkpoint"):  # other optimizer settings (reset by perturb)
         chain(psi, 2, lr=0.5).load(str(ck))
+    with pytest.raises(ValueError, match="checkpoint"):  # other dtype
+        cpsi = fpeps.Peps(psi.geometry, tensors={s: psi[s].to(dtype="complex128") for s in psi.sites()})
+        cops = var.torch_ops(dtype="complex128")
+        var.Chain(var.convert(cpsi, cops.config), Model(THETA), cops, chi=8).load(str(ck))
     with pytest.raises(ValueError, match="checkpoint"):  # other theta
         var.Chain(var.convert(psi, var.torch_ops().config), Model(0.3), var.torch_ops(), chi=8).load(str(ck))
     cell = fpeps.TriangularLattice(dims=(1, 3), full_patch=True)  # same tensor shapes, other unit cell

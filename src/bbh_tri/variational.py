@@ -83,7 +83,7 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
     scale = torch.sqrt(sum((p.detach().abs() ** 2).sum() for p in params))
     eps = rel_eps * scale.item()
     gen = torch.Generator().manual_seed(seed)
-    dirs = [[g / gnorm for g in grads]]
+    dirs = [[g / gnorm for g in grads]] if gnorm > 0 else []  # a zero gradient has no direction
     for _ in range(n_random):
         v = [torch.randn(p.shape, generator=gen, dtype=p.dtype) for p in params]
         n = torch.sqrt(sum((x.abs() ** 2).sum() for x in v))
@@ -91,16 +91,18 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
     x0 = [p.detach().clone() for p in params]
     checks = []
     with torch.no_grad():
-        for v in dirs:
-            vals = []
-            for sgn in (1, -1):
-                for p, q, x in zip(params, x0, v):
-                    p.copy_(q + sgn * eps * x)
-                vals.append(loss())
-            ad = sum((g.conj() * x).sum() for g, x in zip(grads, v)).real.item()
-            checks.append((ad, (vals[0] - vals[1]) / (2 * eps)))
-        for p, q in zip(params, x0):
-            p.copy_(q)
+        try:
+            for v in dirs:
+                vals = []
+                for sgn in (1, -1):
+                    for p, q, x in zip(params, x0, v):
+                        p.copy_(q + sgn * eps * x)
+                    vals.append(loss())
+                ad = sum((g.conj() * x).sum() for g, x in zip(grads, v)).real.item()
+                checks.append((ad, (vals[0] - vals[1]) / (2 * eps)))
+        finally:  # also when a trial-point loss raises
+            for p, q in zip(params, x0):
+                p.copy_(q)
     tol = rtol * gnorm.item() + energy_noise / eps
     return all(abs(a - f) <= tol for a, f in checks), checks, tol
 
@@ -129,7 +131,9 @@ class Chain:
         self.model, self.ops, self.log, self.kept_degenerate, self.ad = model, ops, log, kept_degenerate, ad
         self.template = psi
         self.sites = psi.sites()
-        self.params = [psi[s]._data.detach().clone().requires_grad_() for s in self.sites]
+        # unit-norm start: the loss is invariant under rescaling a tensor, but the raw gradient scales
+        # inversely, so an arbitrary seed scale would bias run()'s absolute tol_grad
+        self.params = [(psi[s]._data / psi[s]._data.norm()).detach().clone().requires_grad_() for s in self.sites]
         opts_svd = {"policy": "fullrank", "D_total": chi, "tol": svd_tol}
         if eps_multiplet is not None:
             opts_svd["eps_multiplet"] = eps_multiplet
@@ -147,7 +151,8 @@ class Chain:
         self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": repr(self.ctm_fwd), "ad": ad,
                      "optimizer": repr(self.opt_kwargs),
                      "kept_degenerate": kept_degenerate, "geometry": repr(peps_to_dict(psi).get("geometry")),
-                     "sites": [tuple(s) for s in self.sites], "shapes": [tuple(psi[s].get_shape()) for s in self.sites]}
+                     "sites": [tuple(s) for s in self.sites], "shapes": [tuple(psi[s].get_shape()) for s in self.sites],
+                     "dtypes": [str(p.dtype) for p in self.params]}
         self.history = []  # one dict per completed step
         self.checkpoint = checkpoint
         self.n_evals = 0
