@@ -267,7 +267,9 @@ class Chain:
         """Optimize until E changes by < tol_E over ``window`` steps, |g| < tol_grad, or max_steps.
 
         A failed step (NoFixedPointError, degenerate SVD gradient, NaN) is retried after
-        :meth:`perturb`; after ``max_failures`` consecutive failures the error propagates.
+        :meth:`perturb`; after ``max_failures`` consecutive failures the error propagates. Before
+        either convergence exit, a gradient that involved zeroed pairs is FD-checked at the final
+        point; a failed check counts as a failure.
         Returns a status string: 'converged', 'grad', 'max_steps'.
         """
         from yastn.tn.fpeps.envs.fixed_pt import NoFixedPointError
@@ -288,11 +290,30 @@ class Chain:
                 self.perturb(seed=1000 * failures + len(self.history))
                 continue
             failures = 0
-            if entry["grad_norm"] < tol_grad:
-                return "grad"
             Es = [h["energy"] for h in self.history[-window - 1:]]
-            if len(Es) > window and max(Es) - min(Es) < tol_E:
-                return "converged"
+            status = ("grad" if entry["grad_norm"] < tol_grad
+                      else "converged" if len(Es) > window and max(Es) - min(Es) < tol_E else None)
+            if status is None:
+                continue
+            # never stop on an unchecked zero-mode gradient (the step's cadence may have skipped it)
+            if entry["zeroed_pairs"] and "fd_check" not in entry:
+                try:
+                    ok, checks, tol = self.check_gradient(seed=entry["step"])
+                except (NoFixedPointError, *RECOVERABLE) as e:
+                    ok, checks, tol = False, repr(e), None
+                entry["fd_check"] = checks
+                if self.checkpoint:
+                    self.save(self.checkpoint)
+                if not ok:
+                    failures += 1
+                    if self.log:
+                        self.log(f"step {entry['step']}: final FD check failed ({checks}); retry {failures}")
+                    if failures > max_failures:
+                        raise DegenerateSVDWarning(f"final gradient fails the FD check: {checks}")
+                    self.perturb(seed=1000 * failures + len(self.history))
+                    continue
+                self._last_fd_step = entry["step"]
+            return status
         return "max_steps"
 
     # ---- checkpoint -------------------------------------------------------------------

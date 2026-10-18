@@ -148,6 +148,23 @@ def test_fd_check_zero_gradient_and_failing_loss():
     assert torch.equal(x, torch.tensor([1.0, 2.0], dtype=torch.float64))
 
 
+def test_run_fd_checks_a_zeroed_gradient_before_stopping(monkeypatch):
+    """A converged-looking step whose gradient zeroed pairs but skipped the FD check (cadence) is
+    checked before run() returns; a failed check perturbs and continues."""
+    ch = chain(bp_state(2, steps=5), 2)
+    calls, perturbs = [], []
+
+    def fake_step():
+        e = {"step": len(ch.history) + 1, "energy": 1.0, "grad_norm": 0.0, "zeroed_pairs": 1}
+        ch.history.append(e)
+        return e
+    monkeypatch.setattr(ch, "step", fake_step)
+    monkeypatch.setattr(ch, "check_gradient", lambda seed: (calls.append(seed), (len(calls) > 1, [(0.0, 1.0)], 0.0))[1])
+    monkeypatch.setattr(ch, "perturb", lambda seed=None: perturbs.append(seed))
+    assert ch.run(max_steps=10) == "grad"
+    assert len(calls) == 2 and len(perturbs) == 1 and "fd_check" in ch.history[-1]
+
+
 def test_chain_start_is_independent_of_tensor_scale():
     psi = bp_state(2, steps=5)
     big = fpeps.Peps(psi.geometry, tensors={s: 1e3 * psi[s] for s in psi.sites()})
