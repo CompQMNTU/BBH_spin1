@@ -13,6 +13,7 @@ backend at larger chi (docs/ad_workflow.md §4).
 """
 
 import contextlib
+import dataclasses
 import io
 import os
 import time
@@ -53,9 +54,9 @@ def pad(psi, D, noise=1e-3, seed=0):
         if max(a.shape[:4]) > D:
             raise ValueError(f"site {s} has bond dimension {a.shape[:4]} > {D}")
         rms = np.sqrt(np.mean(np.abs(a) ** 2))
-        b = noise * rms * rng.standard_normal((D, D, D, D) + a.shape[4:])
+        b = (noise * rms * rng.standard_normal((D, D, D, D) + a.shape[4:])).astype(np.result_type(a, float))
         b[tuple(slice(0, n) for n in a.shape)] = a
-        tensors[s] = yastn.Tensor(config=t.config, s=t.s, n=t.n)
+        tensors[s] = yastn.Tensor(config=t.config, s=t.s, n=t.n, dtype="complex128" if np.iscomplexobj(b) else "float64")
         tensors[s].set_block(val=b, Ds=b.shape)
     return fpeps.Peps(psi.geometry, tensors=tensors)
 
@@ -100,6 +101,9 @@ class Chain:
         self.opt_kwargs = {"lr": lr, "max_iter": 1, "max_eval": max_ls + 1, "history_size": history,
                            "line_search_fn": "strong_wolfe", "tolerance_grad": 0.0, "tolerance_change": 0.0}
         self.optimizer = torch.optim.LBFGS(self.params, **self.opt_kwargs)
+        # what a checkpoint must match to be resumed (load raises otherwise)
+        self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": repr(self.ctm_fwd), "ad": ad,
+                     "kept_degenerate": kept_degenerate, "shapes": [tuple(psi[s].get_shape()) for s in self.sites]}
         self.history = []  # one dict per completed step
         self.checkpoint = checkpoint
         self.n_evals = 0
@@ -170,7 +174,7 @@ class Chain:
             if not all(self.torch.equal(p, q) for p, q in zip(self.params, self._last[2])):
                 self._closure()
         E, by_class, _, grads = self._last
-        g = float(self.torch.sqrt(sum((gi ** 2).sum() for gi in grads)))
+        g = float(self.torch.sqrt(sum((gi.abs() ** 2).sum() for gi in grads)))
         entry = {"step": len(self.history) + 1, "energy": E, "class_energies": by_class,
                  "grad_norm": g, "evals": self.n_evals - n0, "time": time.time() - t0}
         self.history.append(entry)
@@ -231,7 +235,8 @@ class Chain:
                 "optimizer": self.optimizer.state_dict(),
                 "history": list(self.history),
                 "template": peps_to_dict(self.template),
-                "n_evals": self.n_evals}
+                "n_evals": self.n_evals,
+                "meta": self.meta}
 
     def save(self, path):
         """Atomic checkpoint: raw parameters, L-BFGS state, history, tensor template."""
@@ -241,6 +246,8 @@ class Chain:
 
     def load(self, path):
         d = self.torch.load(path, weights_only=False)
+        if d.get("meta") != self.meta:
+            raise ValueError(f"checkpoint {path} was made for {d.get('meta')}, not {self.meta}")
         with self.torch.no_grad():
             for p, q in zip(self.params, d["params"]):
                 p.copy_(q)
@@ -258,7 +265,7 @@ def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500):
     """
     ops = operators.spin1(psi[psi.sites()[0]].config.sym.SYM_ID)
     out = {"energies": {}, "class_energies": {}}
-    for chi in chis:
+    for chi in sorted(chis):  # the diagnostics below use the last (largest) chi
         env = measure.ctm_env(psi, chi, corner_tol=corner_tol, max_sweeps=max_sweeps)
         E, by_class = measure.energy(psi, env, ops, model)
         out["energies"][chi], out["class_energies"][chi] = E, by_class

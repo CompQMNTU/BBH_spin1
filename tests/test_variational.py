@@ -82,6 +82,16 @@ def test_convert_and_pad_keep_the_state():
     assert measure.energy(noisy, measure.ctm_env(noisy, 8), ops, model)[0] == pytest.approx(E2, abs=1e-4)
 
 
+def test_pad_keeps_complex_entries():
+    psi = bp_state(2, steps=5)
+    for s in psi.sites():
+        psi[s] = 1j * psi[s]
+    padded = var.pad(psi, 3, noise=0.0)
+    for s in psi.sites():
+        a, b = psi[s].to_numpy(), padded[s].to_numpy()
+        assert np.array_equal(b[:2, :2, :2, :2], a) and not b[2:].any()
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("ad", ["unrolled", "fp"])
 def test_gradient_matches_fd_without_degeneracy(ad):
@@ -114,12 +124,18 @@ def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
     a, b = ch.step(), resumed.step()
     assert a["energy"] == b["energy"]
     assert all(torch.equal(p, q) for p, q in zip(ch.params, resumed.params))
+    with pytest.raises(ValueError, match="checkpoint"):  # other chi
+        var.Chain(var.convert(psi, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=9).load(str(ck))
+    with pytest.raises(ValueError, match="checkpoint"):  # other theta
+        var.Chain(var.convert(psi, var.torch_ops().config), Model(0.3), var.torch_ops(), chi=8).load(str(ck))
 
 
 @pytest.mark.slow
 def test_validate_reports_energy_per_chi():
     psi = bp_state(2, steps=20)
-    out = var.validate(psi, Model(THETA), [4, 8])
+    out = var.validate(psi, Model(THETA), [8, 4])
     assert set(out["energies"]) == {4, 8}
+    nn = [out["class_energies"][8][c] for c in ("h", "v", "d")]
+    assert out["c3_spread"] == max(nn) - min(nn)  # diagnostics at the largest chi, not the last given
     assert abs(out["energies"][8] - out["energies"][4]) < 1e-2
     assert out["c3_spread"] >= 0 and len(out["order"]) == 3

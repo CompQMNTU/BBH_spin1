@@ -6,7 +6,8 @@
 Seeds: a saved numpy PEPS (``peps_to_dict`` pickle, e.g. from ``m3_theta_scan.py --save-dir``),
 padded to D with ``--noise`` if its bond dimension is smaller; or ``bp`` (fresh EnvBP run at D
 from a random product state) or a product seed name (FM, FQ, AFQ, SU3, random; padded to D).
-Writes OUT.pt (checkpoint, resumed if present), OUT.pkl (final numpy state) and OUT.json
+Writes OUT.pt (checkpoint; resumed if present, an error if it was made for another theta, chi or D),
+OUT.pkl (final numpy state) and OUT.json
 (history, validation at chi = D^2, 2D^2, 3D^2).
 """
 
@@ -40,7 +41,10 @@ def seed_state(spec, D, theta, noise, rng):
         psi = states.random_product_peps(geo, ops, seed=rng)
     else:
         psi = states.product_peps(geo, states.seed_vectors(spec), ops)
-    if min(d for s in psi.sites() for d in psi[s].get_shape()[:4]) < D:
+    dims = [d for s in psi.sites() for d in psi[s].get_shape()[:4]]
+    if max(dims) > D:
+        raise SystemExit(f"seed has bond dimension {max(dims)} > --D {D}")
+    if min(dims) < D:
         psi = var.pad(psi, D, noise=noise, seed=rng)
     return psi
 
@@ -69,7 +73,7 @@ def main():
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     ops = var.torch_ops()
     ck = a.out + ".pt"
-    if os.path.exists(ck):  # resume: the template defines the tensor structure
+    if os.path.exists(ck):  # resume: the template defines the tensor structure; load() checks theta, chi, D
         import torch
         template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False)["template"], config=ops.config)
         chain = var.Chain(template, model, ops, chi, checkpoint=ck, log=print).load(ck)
