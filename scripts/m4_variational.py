@@ -54,6 +54,9 @@ def seed_state(spec, D, theta, noise, rng, sym="dense"):
         raise SystemExit(f"seed has bond dimension {max(dims)} > --D {D}")
     if min(dims) < D and sym == "dense":
         psi = var.pad(psi, D, noise=noise, seed=rng)
+    elif max(dims) < D:  # the checkpoint would record a smaller D and refuse to resume with --D
+        raise SystemExit(f"symmetric seed reaches only bond dimension {max(dims)} < --D {D} "
+                         "(e.g. an eigenstate seed that EnvBP does not entangle); use another seed or D")
     elif min(dims) < D:
         print(f"warning: symmetric seed has bond dimensions down to {min(dims)} < D = {D}; it stays so", flush=True)
     return psi

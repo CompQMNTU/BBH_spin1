@@ -215,10 +215,13 @@ def _neutral(ops, dense_ops):
 
 def two_site_terms(ops, op2):
     """[(1, A, B)] with op2 = sum A ⊗ B and single-site A, B of definite charge (basis-transition
-    operators |a><b| ⊗ |c><d| of the nonzero elements); for :func:`measure.bond_energy` on classes
-    without an rdm."""
+    operators |a><b| ⊗ |c><d| of the nonzero elements), for :func:`measure.bond_energy` on classes
+    without an rdm. :class:`SymSpin1` only (dense and U1 use the S·S expansion of
+    ``measure.bbh_terms``)."""
+    if not is_matrix_built(ops):
+        raise TypeError("two_site_terms needs a SymSpin1 operator set (U1xU1, Z2xZ2)")
     M = as_matrix(ops, op2).reshape(3, 3, 3, 3)  # (out1, out2, in1, in2), canonical basis
-    U = ops.basis if is_matrix_built(ops) else np.eye(3)
+    U = ops.basis
     M = np.einsum("ia,jb,ijkl,kc,ld->abcd", U.conj(), U.conj(), M, U, U)  # config basis
     out = []
     for a, b, c, d in zip(*np.nonzero(np.abs(M) > 1e-12)):

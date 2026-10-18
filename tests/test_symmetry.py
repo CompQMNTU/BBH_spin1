@@ -136,3 +136,28 @@ def test_symmetric_ad_gradient_matches_fd(sym, seed, t):
                 p.copy_(q + sgn * 1e-5 * vi)
         vals.append(ch.loss()[0].item())
     assert ad == pytest.approx((vals[0] - vals[1]) / 2e-5, rel=1e-5)
+
+
+@pytest.mark.parametrize("sym, seed, t, J2, K2", [("U1xU1", "SU3", 0.25, 0.3, 0.3), ("Z2xZ2", "AFQ", 0.35, 0.3, -0.2)])
+def test_knight_nnn_energy_matches_dense(sym, seed, t, J2, K2):
+    """Knight-move NNN classes have no rdm; SymSpin1 measures them via operators.two_site_terms."""
+    ops, model = operators.spin1(sym), Model(np.pi * t, J2=J2, K2=K2)
+    psi = states.product_peps(GEO, states.seed_vectors(seed), ops)
+    env = measure.ctm_env(psi, 4)
+    E, by_class = measure.energy(psi, env, ops, model)
+    knight = [c for c in by_class if c not in measure.RDM_CLASSES]
+    assert knight  # the test exercises the no-rdm path
+    assert E == pytest.approx(states.product_energy(model, states.seed_vectors(seed)), abs=1e-12)
+    dense = states.to_dense(psi, ops)
+    Ed, by_d = measure.energy(dense, measure.ctm_env(dense, 4), DENSE, model)
+    assert all(by_class[c] == pytest.approx(by_d[c], abs=1e-12) for c in knight)
+
+
+def test_two_site_terms_recomposes_and_rejects_yastn_spin1():
+    ops = operators.spin1("Z2xZ2")
+    h = operators.h_bond(ops, 0.3, -0.8)
+    total = sum(c * np.kron(operators.as_matrix(ops, A), operators.as_matrix(ops, B))
+                for c, A, B in operators.two_site_terms(ops, h))
+    assert np.allclose(total, operators.as_matrix(ops, h), atol=1e-13)
+    with pytest.raises(TypeError):
+        operators.two_site_terms(DENSE, operators.h_bond(DENSE, 0.3, -0.8))
