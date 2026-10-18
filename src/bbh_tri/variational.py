@@ -24,7 +24,7 @@ import yastn
 import yastn.tn.fpeps as fpeps
 
 from . import lattice, measure, operators
-from .yastn_compat import DegenerateSVDWarning, exact_svd_backward, peps_to_dict
+from .yastn_compat import DegenerateSVDWarning, exact_svd_backward, peps_to_dict, zeroed_pairs
 
 # Raised by a loss evaluation that cannot be trusted; the chain perturbs and retries (§6).
 RECOVERABLE = (DegenerateSVDWarning, FloatingPointError)
@@ -77,10 +77,14 @@ class Chain:
     roundoff-level values warns as a degenerate pair). ``kept_degenerate``: see
     ``yastn_compat._KEPT_DEGENERATE``. ``ad``: 'unrolled' or 'fp' (see :meth:`loss`). Each
     :meth:`step` is one L-BFGS iteration (strong-Wolfe line search, usually 1-3 loss evaluations).
+    Zeroing a degenerate pair has no a-priori error bound, so after a step that zeroed one,
+    :meth:`check_gradient` compares AD with central differences (first time, then at most every
+    ``fd_check_every`` steps); a relative error above ``fd_rtol`` fails the step.
     """
 
     def __init__(self, psi, model, ops, chi, corner_tol=1e-9, max_sweeps=500, svd_tol=1e-8,
-                 eps_multiplet=None, kept_degenerate="zero", ad="unrolled", history=20, lr=1.0, max_ls=20, checkpoint=None, log=None):
+                 eps_multiplet=None, kept_degenerate="zero", ad="unrolled", history=20, lr=1.0, max_ls=20,
+                 fd_check_every=10, fd_rtol=1e-3, checkpoint=None, log=None):
         import torch
         self.torch = torch
         if ad not in ("fp", "unrolled"):
@@ -102,7 +106,9 @@ class Chain:
                            "line_search_fn": "strong_wolfe", "tolerance_grad": 0.0, "tolerance_change": 0.0}
         self.optimizer = torch.optim.LBFGS(self.params, **self.opt_kwargs)
         # what a checkpoint must match to be resumed (load raises otherwise)
+        self.fd_check_every, self.fd_rtol, self._last_fd_step = fd_check_every, fd_rtol, None
         self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": repr(self.ctm_fwd), "ad": ad,
+                     "optimizer": repr(self.opt_kwargs),
                      "kept_degenerate": kept_degenerate, "geometry": repr(peps_to_dict(psi).get("geometry")),
                      "sites": [tuple(s) for s in self.sites], "shapes": [tuple(psi[s].get_shape()) for s in self.sites]}
         self.history = []  # one dict per completed step
@@ -166,7 +172,7 @@ class Chain:
     # ---- optimization -----------------------------------------------------------------
     def step(self):
         """One L-BFGS iteration; returns the log entry. Raises RECOVERABLE / NoFixedPointError."""
-        t0, n0 = time.time(), self.n_evals
+        t0, n0, z0 = time.time(), self.n_evals, zeroed_pairs()
         with exact_svd_backward(self.kept_degenerate), warnings.catch_warnings():
             warnings.simplefilter("error", DegenerateSVDWarning)
             self.optimizer.step(self._closure)
@@ -177,7 +183,16 @@ class Chain:
         E, by_class, _, grads = self._last
         g = float(self.torch.sqrt(sum((gi.abs() ** 2).sum() for gi in grads)))
         entry = {"step": len(self.history) + 1, "energy": E, "class_energies": by_class,
-                 "grad_norm": g, "evals": self.n_evals - n0, "time": time.time() - t0}
+                 "grad_norm": g, "evals": self.n_evals - n0, "zeroed_pairs": zeroed_pairs() - z0}
+        if entry["zeroed_pairs"] and (self._last_fd_step is None
+                                      or entry["step"] - self._last_fd_step >= self.fd_check_every):
+            ad, fd, noise = self.check_gradient()
+            entry["fd_check"] = (ad, fd)
+            if abs(ad - fd) > self.fd_rtol * abs(ad) + noise:
+                raise DegenerateSVDWarning(f"gradient with zeroed degenerate pairs fails the FD check: "
+                                           f"AD {ad:.6e} vs FD {fd:.6e}")
+            self._last_fd_step = entry["step"]
+        entry["time"] = time.time() - t0
         self.history.append(entry)
         if self.log:
             self.log(f"step {entry['step']} E={entry['energy']:.10f} |g|={g:.2e} evals={entry['evals']} "
@@ -185,6 +200,26 @@ class Chain:
         if self.checkpoint:
             self.save(self.checkpoint)
         return entry
+
+    def check_gradient(self, rel_eps=1e-4, energy_noise=1e-10):
+        """(AD, central FD, FD noise) derivative of the loss along the normalized gradient at the
+        current parameters (AD value = |g|); FD noise = energy_noise / step, the FD error from a CTM
+        energy converged to ~energy_noise. Uses the gradient of the last evaluation, which
+        :meth:`step` leaves at the current point."""
+        grads = self._last[3]
+        gnorm = self.torch.sqrt(sum((g.abs() ** 2).sum() for g in grads))
+        scale = self.torch.sqrt(sum((p.detach().abs() ** 2).sum() for p in self.params))
+        eps = rel_eps * scale.item()
+        x0 = [p.detach().clone() for p in self.params]
+        vals = []
+        with exact_svd_backward(self.kept_degenerate), self.torch.no_grad():
+            for sgn in (1, -1):
+                for p, q, g in zip(self.params, x0, grads):
+                    p.copy_(q + sgn * eps * g / gnorm)
+                vals.append(self.loss()[0].item())
+            for p, q in zip(self.params, x0):
+                p.copy_(q)
+        return gnorm.item(), (vals[0] - vals[1]) / (2 * eps), energy_noise / eps
 
     def perturb(self, noise=1e-3, seed=None):
         """Add noise * rms Gaussian noise to every parameter and reset the L-BFGS history (§6)."""
@@ -237,6 +272,7 @@ class Chain:
                 "history": list(self.history),
                 "template": peps_to_dict(self.template),
                 "n_evals": self.n_evals,
+                "last_fd_step": self._last_fd_step,
                 "meta": self.meta}
 
     def save(self, path):
@@ -255,6 +291,7 @@ class Chain:
         self.optimizer.load_state_dict(d["optimizer"])
         self.history = list(d["history"])
         self.n_evals = d["n_evals"]
+        self._last_fd_step = d["last_fd_step"]
         return self
 
 

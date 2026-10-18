@@ -113,6 +113,20 @@ def test_unrolled_gradient_matches_fd_with_kept_degenerate_pair(psi_d3):
 
 
 @pytest.mark.slow
+def test_chain_fd_checks_gradient_after_zeroing(psi_d3, monkeypatch):
+    """A step that zeroes a degenerate pair triggers check_gradient; a mismatch fails the step."""
+    ch = chain(psi_d3, 3)
+    entry = ch.step()
+    assert entry["zeroed_pairs"] > 0
+    ad, fd = entry["fd_check"]
+    assert ad == pytest.approx(fd, rel=1e-3)
+    ch2 = chain(psi_d3, 3)
+    monkeypatch.setattr(ch2, "check_gradient", lambda: (1.0, 2.0, 0.0))
+    with pytest.raises(DegenerateSVDWarning, match="FD check"):
+        ch2.step()
+
+
+@pytest.mark.slow
 def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
     psi = bp_state(2, steps=20)
     ck = tmp_path / "chain.pt"
@@ -127,6 +141,8 @@ def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
     assert all(torch.equal(p, q) for p, q in zip(ch.params, resumed.params))
     with pytest.raises(ValueError, match="checkpoint"):  # other chi
         var.Chain(var.convert(psi, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=9).load(str(ck))
+    with pytest.raises(ValueError, match="checkpoint"):  # other optimizer settings (reset by perturb)
+        chain(psi, 2, lr=0.5).load(str(ck))
     with pytest.raises(ValueError, match="checkpoint"):  # other theta
         var.Chain(var.convert(psi, var.torch_ops().config), Model(0.3), var.torch_ops(), chi=8).load(str(ck))
     cell = fpeps.TriangularLattice(dims=(1, 3), full_patch=True)  # same tensor shapes, other unit cell

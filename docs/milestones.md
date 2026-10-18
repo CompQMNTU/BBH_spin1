@@ -65,7 +65,7 @@ NTU follow-up (2026-10-18): the warm-start NTU scan drifted above EnvBP. In the 
 AD part: `variational.py` (`Chain`: L-BFGS over raw site-tensor data, tensors normalized inside the loss, energy via `measure.class_energies` on torch tensors; checkpoint/resume; `validate` with the numpy backend at χ = D², 2D², 3D²; `pad`, `convert`), `scripts/m4_variational.py` (one chain, resumable), `tests/test_variational.py`. Design and deviations: docs/ad_workflow.md (**[impl]** marks).
 
 Findings:
-- At D = 3 the CTM projector SVDs keep an exactly degenerate pair (~2e-4 σ_max). `fp_ctmrg`'s implicit gradient was wrong by ×10 on one such state; the default is now plain backpropagation through the CTM sweeps (`ad="unrolled"`), with the pair's 0/0 term dropped (`exact_svd_backward(kept_degenerate="zero")`, small pairs only). AD = FD to 2e-8 (docs/yastn_findings.md U4b).
+- At D = 3 the CTM projector SVDs keep an exactly degenerate pair (~2e-4 σ_max). `fp_ctmrg`'s implicit gradient was wrong by ×10 on one such state; the default is now plain backpropagation through the CTM sweeps (`ad="unrolled"`), with the pair's 0/0 term dropped (`exact_svd_backward(kept_degenerate="zero")`, small pairs only). AD = FD to 2e-8 there, but the dropped term has no a-priori bound, so `Chain` FD-checks the gradient after steps that zero a pair (docs/yastn_findings.md U4b).
 - torch L-BFGS with `max_iter=1` allows no line-search zoom by default (`max_eval`); fixed in `Chain` (docs/ad_workflow.md §5b).
 
 First result, θ = π/4, √3×√3, dense: D = 3 AD from the EnvBP state gives E = 1.67403 (validated, χ-converged), 0.0145 below EnvBP (1.68856); C₃ spread 1.8e-3. D = 2 stays at the BP minimum (1.84010).
