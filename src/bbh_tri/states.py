@@ -10,6 +10,7 @@ and every NNN class connects each sublattice to itself, so for a product state
 
 import numpy as np
 import scipy.optimize
+import yastn
 import yastn.tn.fpeps as fpeps
 
 from . import lattice, operators
@@ -100,22 +101,16 @@ def product_peps(geo, vectors, ops):
     """D = 1 PEPS on ``geo`` with site state vectors[lattice.sublattice(site)].
 
     Vectors are in the canonical basis. Complex vectors need a complex config
-    (``operators.spin1(..., default_dtype='complex128')``); in U1 each vector must be an Sz eigenstate.
+    (``operators.spin1(..., default_dtype='complex128')``); with a symmetry each vector must be a
+    charge eigenstate (in U1xU1 and Z2xZ2 its phase is dropped).
     """
-    sz_of = {0: 1, 1: 0, 2: -1}
     tensors = {}
     for s in geo.sites():
         v = np.asarray(vectors[lattice.sublattice(s)])
-        if np.iscomplexobj(v) and np.any(v.imag != 0) and "complex" not in str(ops.config.default_dtype):
+        if np.iscomplexobj(v) and np.any(v.imag != 0) and operators.is_dense(ops) \
+                and "complex" not in str(ops.config.default_dtype):
             raise ValueError("complex state vector needs a complex config")
-        nz = [k for k in range(3) if v[k] != 0]
-        if not operators.is_dense(ops) and len(nz) != 1:
-            raise ValueError("U1 product states must be Sz eigenstates")
-        terms = [v[k].item() * ops.vec_z(val=sz_of[k]) for k in nz]  # python scalars: numpy * Tensor misbehaves
-        vec = terms[0]
-        for t in terms[1:]:
-            vec = vec + t
-        tensors[s] = vec
+        tensors[s] = operators.state_vector(ops, v)
     return fpeps.product_peps(geo, tensors)
 
 
@@ -130,3 +125,33 @@ def random_product_peps(geo, ops, seed=0):
         c = rng.normal(size=3)
         tensors[s] = c[0].item() * basis[0] + c[1].item() * basis[1] + c[2].item() * basis[2]
     return fpeps.product_peps(geo, tensors)
+
+
+def to_dense(psi, ops, dense_ops=None):
+    """Dense copy of a symmetric PEPS (``ops`` its operator set); the state is unchanged. Used to
+    cross-check symmetric runs.
+
+    Site tensors have legs (t, l, b, r, p) with p = fused (physical, ancilla), the ancilla being
+    one-dimensional and carrying the charge of a product-state seed. Each virtual leg is expanded
+    over the union of the sectors on both ends of its bond (a tensor lists only the sectors of its
+    own blocks), the physical leg over the full local space and then rotated to the canonical basis.
+    """
+    dense_ops = operators.spin1("dense") if dense_ops is None else dense_ops
+    B = operators.basis_matrix(ops)
+    other = {0: ("t", 2), 1: ("l", 3), 2: ("b", 0), 3: ("r", 1)}
+    phys = ops.space()
+    tensors = {}
+    for s in psi.sites():
+        t = psi[s].unfuse_legs(axes=4)  # (t, l, b, r, physical, ancilla)
+        legs = {4: phys if t.s[4] == phys.s else phys.conj()}
+        for ax, (d, oax) in other.items():
+            nb = psi.nn_site(s, d)
+            own = t.get_legs(axes=ax)
+            legs[ax] = own if nb is None else yastn.legs_union(own, psi[nb].get_legs(axes=oax).conj())
+        a = np.moveaxis(np.tensordot(t.to_numpy(legs=legs), B, axes=((4,), (1,))), -1, 4)  # physical -> canonical
+        if np.abs(a.imag).max() <= 1e-14 * np.abs(a).max():
+            a = a.real
+        T = yastn.Tensor(config=dense_ops.config, s=t.s, dtype="complex128" if np.iscomplexobj(a) else "float64")
+        T.set_block(val=a, Ds=a.shape)
+        tensors[s] = T.fuse_legs(axes=(0, 1, 2, 3, (4, 5)))
+    return fpeps.Peps(psi.geometry, tensors=tensors)

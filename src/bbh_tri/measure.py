@@ -67,7 +67,9 @@ def bond_energy(psi, env, ops, bond, cls, J, K):
     """<J S·S + K (S·S)^2> on one bond."""
     if cls in RDM_CLASSES:
         return rdm_expectation(operators.h_bond(ops, J, K), bond_rdm(psi, env, bond, cls))
-    return sum(c * env.measure_nsite_exact(A, B, sites=list(bond)) for c, A, B in bbh_terms(ops, J, K))
+    terms = (operators.two_site_terms(ops, operators.h_bond(ops, J, K)) if operators.is_matrix_built(ops)
+             else bbh_terms(ops, J, K))  # SymSpin1: S+ has no definite charge
+    return sum(c * env.measure_nsite_exact(A, B, sites=list(bond)) for c, A, B in terms)
 
 
 def class_energies(psi, env, ops, model):

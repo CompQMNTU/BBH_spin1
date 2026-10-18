@@ -4,8 +4,13 @@
         --seed states/pi4_D3_BP.pkl --out results/m4/pi4_D3
 
 Seeds: a saved numpy PEPS (``peps_to_dict`` pickle, e.g. from ``m3_theta_scan.py --save-dir``),
-padded to D with ``--noise`` if its bond dimension is smaller; or ``bp`` (fresh EnvBP run at D
-from a random product state) or a product seed name (FM, FQ, AFQ, SU3, random; padded to D).
+padded to D with ``--noise`` if its bond dimension is smaller; ``bp`` (fresh EnvBP run at D from a
+random product state); ``bp:NAME`` (EnvBP run at D from the product seed NAME); or a product seed
+name (FM, FQ, AFQ, SU3, random; padded to D).
+
+``--sym`` (SPEC §4.5): dense, U1, U1xU1 (theta = pi/4 only) or Z2xZ2. Symmetric tensors cannot be
+padded, so a symmetric run needs ``bp:NAME`` with a compatible seed (e.g. U1xU1: bp:SU3, Z2xZ2:
+bp:AFQ, U1: bp:FQ) or a pickle saved with the same symmetry at bond dimension D.
 Writes OUT.pt (checkpoint; resumed if present, an error if it was made for another theta, chi or D),
 OUT.pkl (final numpy state) and OUT.json
 (history, validation at chi = D^2, 2D^2, 3D^2).
@@ -23,19 +28,22 @@ import pickle
 import numpy as np
 
 
-def seed_state(spec, D, theta, noise, rng):
+def seed_state(spec, D, theta, noise, rng, sym="dense"):
     import yastn.tn.fpeps as fpeps
 
     from bbh_tri import evolve, lattice, operators, states, variational as var
     from bbh_tri.hamiltonian import Model
 
-    ops = operators.spin1("dense")
+    ops = operators.spin1(sym)
     geo = lattice.geometry("sqrt3")
     if os.path.exists(spec):
         with open(spec, "rb") as f:
             psi = fpeps.Peps.from_dict(pickle.load(f), config=ops.config)
     elif spec == "bp":
         psi = states.random_product_peps(geo, ops, seed=rng)
+        evolve.evolve(psi, Model(theta), ops, D)
+    elif spec.startswith("bp:"):
+        psi = states.product_peps(geo, states.seed_vectors(spec[3:]), ops)
         evolve.evolve(psi, Model(theta), ops, D)
     elif spec == "random":
         psi = states.random_product_peps(geo, ops, seed=rng)
@@ -44,8 +52,13 @@ def seed_state(spec, D, theta, noise, rng):
     dims = [d for s in psi.sites() for d in psi[s].get_shape()[:4]]
     if max(dims) > D:
         raise SystemExit(f"seed has bond dimension {max(dims)} > --D {D}")
-    if min(dims) < D:
+    if min(dims) < D and sym == "dense":
         psi = var.pad(psi, D, noise=noise, seed=rng)
+    elif max(dims) < D:  # the checkpoint would record a smaller D and refuse to resume with --D
+        raise SystemExit(f"symmetric seed reaches only bond dimension {max(dims)} < --D {D} "
+                         "(e.g. an eigenstate seed that EnvBP does not entangle); use another seed or D")
+    elif min(dims) < D:
+        print(f"warning: symmetric seed has bond dimensions down to {min(dims)} < D = {D}; it stays so", flush=True)
     return psi
 
 
@@ -53,7 +66,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--theta-over-pi", type=float, required=True)
     p.add_argument("--D", type=int, required=True)
-    p.add_argument("--seed", required=True, help="pickle path | bp | FM | FQ | AFQ | SU3 | random")
+    p.add_argument("--seed", required=True, help="pickle path | bp | bp:NAME | FM | FQ | AFQ | SU3 | random")
+    p.add_argument("--sym", default="dense", help="dense | U1 | U1xU1 | Z2xZ2")
     p.add_argument("--out", required=True, help="output prefix")
     p.add_argument("--chi", type=int, default=None, help="optimization chi (default 2 D^2)")
     p.add_argument("--max-steps", type=int, default=200)
@@ -71,7 +85,7 @@ def main():
     model = Model(theta)
     D, chi = a.D, a.chi or 2 * a.D * a.D
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    ops = var.torch_ops()
+    ops = var.torch_ops(a.sym)
     ck = a.out + ".pt"
     if os.path.exists(ck):  # resume: the template defines the tensor structure; load() checks theta, chi, D
         import torch
@@ -79,17 +93,17 @@ def main():
         D_ck = max(d for s in template.sites() for d in template[s].get_shape()[:4])
         if D_ck != D:
             raise SystemExit(f"checkpoint {ck} has D = {D_ck}, not --D {D}")
-        chain = var.Chain(template, model, ops, chi, checkpoint=ck, log=print).load(ck)
+        chain = var.Chain(template, model, ops, chi, checkpoint=ck, log=lambda s: print(s, flush=True)).load(ck)
         print(f"resumed at step {len(chain.history)}", flush=True)
     else:
-        psi = seed_state(a.seed, D, theta, a.noise, a.rng)
-        chain = var.Chain(var.convert(psi, ops.config), model, ops, chi, checkpoint=ck, log=print)
+        psi = seed_state(a.seed, D, theta, a.noise, a.rng, a.sym)
+        chain = var.Chain(var.convert(psi, ops.config), model, ops, chi, checkpoint=ck, log=lambda s: print(s, flush=True))
     status = chain.run(max_steps=a.max_steps)
     psi = chain.numpy_peps()
     with open(a.out + ".pkl", "wb") as f:
         pickle.dump(peps_to_dict(psi), f)
     val = var.validate(psi, model, [D * D, 2 * D * D, 3 * D * D])
-    rec = {"theta_over_pi": a.theta_over_pi, "D": D, "chi_opt": chi, "seed": a.seed, "noise": a.noise,
+    rec = {"theta_over_pi": a.theta_over_pi, "D": D, "chi_opt": chi, "seed": a.seed, "sym": a.sym, "noise": a.noise,
            "rng": a.rng, "status": status, "energy_opt": chain.history[-1]["energy"] if chain.history else None,
            "validation": {**val, "order": {str(k): v for k, v in val["order"].items()}},
            "history": chain.history}
