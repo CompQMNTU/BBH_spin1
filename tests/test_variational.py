@@ -148,21 +148,36 @@ def test_fd_check_zero_gradient_and_failing_loss():
     assert torch.equal(x, torch.tensor([1.0, 2.0], dtype=torch.float64))
 
 
-def test_run_fd_checks_a_zeroed_gradient_before_stopping(monkeypatch):
-    """A converged-looking step whose gradient zeroed pairs but skipped the FD check (cadence) is
-    checked before run() returns; a failed check perturbs and continues."""
+def _fake_run_chain(monkeypatch, results):
+    """Chain whose steps always look converged with a zeroed, unchecked gradient; check_gradient
+    returns the given pass/fail sequence."""
     ch = chain(bp_state(2, steps=5), 2)
     calls, perturbs = [], []
 
     def fake_step():
-        e = {"step": len(ch.history) + 1, "energy": 1.0, "grad_norm": 0.0, "zeroed_pairs": 1}
+        e = {"step": len(ch.history) + 1, "energy": 1.0, "grad_norm": 0.0, "zeroed_pairs": 0, "zeroed_grad": True}
         ch.history.append(e)
         return e
     monkeypatch.setattr(ch, "step", fake_step)
-    monkeypatch.setattr(ch, "check_gradient", lambda seed: (calls.append(seed), (len(calls) > 1, [(0.0, 1.0)], 0.0))[1])
+    monkeypatch.setattr(ch, "check_gradient", lambda seed: (calls.append(seed), (results[len(calls) - 1], [(0.0, 1.0)], 0.0))[1])
     monkeypatch.setattr(ch, "perturb", lambda seed=None: perturbs.append(seed))
-    assert ch.run(max_steps=10) == "grad"
-    assert len(calls) == 2 and len(perturbs) == 1 and "fd_check" in ch.history[-1]
+    return ch, calls, perturbs
+
+
+def test_run_fd_checks_a_zeroed_gradient_before_stopping(monkeypatch):
+    """The final gate runs even when the step zeroed nothing itself (reused cached gradient,
+    zeroed_grad provenance); a rejected step is rolled back, so it does not use up max_steps."""
+    ch, calls, perturbs = _fake_run_chain(monkeypatch, [False, True])
+    assert ch.run(max_steps=1) == "grad"
+    assert len(calls) == 2 and len(perturbs) == 1
+    assert len(ch.history) == 1 and "fd_check" in ch.history[-1]
+
+
+def test_run_raises_after_repeated_final_check_failures(monkeypatch):
+    ch, calls, _ = _fake_run_chain(monkeypatch, [False] * 10)
+    with pytest.raises(DegenerateSVDWarning, match="final gradient"):
+        ch.run(max_steps=10, max_failures=3)
+    assert len(calls) == 4 and ch.history == []
 
 
 def test_chain_start_is_independent_of_tensor_scale():

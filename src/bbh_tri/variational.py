@@ -203,12 +203,14 @@ class Chain:
             return self.torch.tensor(last[0], dtype=self.params[0].dtype)
         self.optimizer.zero_grad()
         E, by_class = self.loss()
+        z0 = zeroed_pairs()
         with contextlib.redirect_stdout(io.StringIO()):
             E.backward()
         if not all(self.torch.isfinite(p.grad).all() for p in self.params):
             raise FloatingPointError("non-finite gradient")
         self._last = (E.item(), {c: float(np.real(v.item() if hasattr(v, "item") else v)) for c, v in by_class.items()},
-                      [p.detach().clone() for p in self.params], [p.grad.clone() for p in self.params])
+                      [p.detach().clone() for p in self.params], [p.grad.clone() for p in self.params],
+                      zeroed_pairs() > z0)  # provenance: this gradient involved zeroed pairs
         return E
 
     # ---- optimization -----------------------------------------------------------------
@@ -222,11 +224,14 @@ class Chain:
             # if it was made exactly there, else evaluate again
             if not all(self.torch.equal(p, q) for p, q in zip(self.params, self._last[2])):
                 self._closure()
-        E, by_class, _, grads = self._last
+        E, by_class, _, grads, zeroed_grad = self._last
         g = float(self.torch.sqrt(sum((gi.abs() ** 2).sum() for gi in grads)))
+        # zeroed_pairs: pairs zeroed in this step's evaluations; zeroed_grad: the gradient at the
+        # accepted point involved zeroing (kept with the cached gradient, also when it is reused)
         entry = {"step": len(self.history) + 1, "energy": E, "class_energies": by_class,
-                 "grad_norm": g, "evals": self.n_evals - n0, "zeroed_pairs": zeroed_pairs() - z0}
-        if entry["zeroed_pairs"] and (self._last_fd_step is None
+                 "grad_norm": g, "evals": self.n_evals - n0, "zeroed_pairs": zeroed_pairs() - z0,
+                 "zeroed_grad": zeroed_grad}
+        if zeroed_grad and (self._last_fd_step is None
                                       or entry["step"] - self._last_fd_step >= self.fd_check_every):
             ok, checks, tol = self.check_gradient(seed=entry["step"])
             entry["fd_check"] = checks
@@ -269,7 +274,8 @@ class Chain:
         A failed step (NoFixedPointError, degenerate SVD gradient, NaN) is retried after
         :meth:`perturb`; after ``max_failures`` consecutive failures the error propagates. Before
         either convergence exit, a gradient that involved zeroed pairs is FD-checked at the final
-        point; a failed check counts as a failure.
+        point; a failed check rejects the step (rolled back, then perturbed) and counts as a failure.
+        The failure count resets only after a step that passes all checks.
         Returns a status string: 'converged', 'grad', 'max_steps'.
         """
         from yastn.tn.fpeps.envs.fixed_pt import NoFixedPointError
@@ -289,30 +295,38 @@ class Chain:
                         p.copy_(q)
                 self.perturb(seed=1000 * failures + len(self.history))
                 continue
-            failures = 0
             Es = [h["energy"] for h in self.history[-window - 1:]]
             status = ("grad" if entry["grad_norm"] < tol_grad
                       else "converged" if len(Es) > window and max(Es) - min(Es) < tol_E else None)
             if status is None:
+                failures = 0
                 continue
             # never stop on an unchecked zero-mode gradient (the step's cadence may have skipped it)
-            if entry["zeroed_pairs"] and "fd_check" not in entry:
+            if entry["zeroed_grad"] and "fd_check" not in entry:
                 try:
-                    ok, checks, tol = self.check_gradient(seed=entry["step"])
+                    ok, checks, _ = self.check_gradient(seed=entry["step"])
                 except (NoFixedPointError, *RECOVERABLE) as e:
-                    ok, checks, tol = False, repr(e), None
-                entry["fd_check"] = checks
-                if self.checkpoint:
-                    self.save(self.checkpoint)
+                    ok, checks = False, repr(e)
                 if not ok:
                     failures += 1
                     if self.log:
                         self.log(f"step {entry['step']}: final FD check failed ({checks}); retry {failures}")
+                    # reject the step: history, parameters and checkpoint go back to before it
+                    self.history.pop()
+                    with self.torch.no_grad():
+                        for p, q in zip(self.params, snapshot):
+                            p.copy_(q)
+                    self.reset_optimizer()
+                    if self.checkpoint:
+                        self.save(self.checkpoint)
                     if failures > max_failures:
                         raise DegenerateSVDWarning(f"final gradient fails the FD check: {checks}")
                     self.perturb(seed=1000 * failures + len(self.history))
                     continue
+                entry["fd_check"] = checks
                 self._last_fd_step = entry["step"]
+                if self.checkpoint:
+                    self.save(self.checkpoint)
             return status
         return "max_steps"
 
