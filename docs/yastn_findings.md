@@ -115,6 +115,12 @@ Setup: θ = π/4, √3×√3, dense, D = 3 EnvBP states, χ = 18, loss = E/site 
 
 A U1-symmetric `Spin1` on TriangularLattice with path gates, NTU at D=3, and then CTM runs without errors.
 
+M4 (2026-10-18), `operators.SymSpin1`:
+- A custom `sym_abelian` subclass (`sym_Z2xZ2`, fusion mod 2 on both charges) passed as `make_config(sym=cls)` works through gates (`eigh`, `svd_with_truncation`), EnvBP evolution, CTM, `Peps.to_dict`/`from_dict` and torch AD through CTM (gradient = FD to 1e-5 rel, `tests/test_symmetry.py`). `U1xU1` is built in.
+- PEPS site tensors have legs (t, l, b, r, p) with p a fused pair (physical, ancilla) (`hist=p(oo)`); the ancilla is one-dimensional and `product_peps` puts the charge of a charged site vector on it, so the tensor charge stays `n = 0`. A tensor lists only the sectors of its own nonzero blocks, so `to_numpy()` without `legs` drops absent physical states and can give the two ends of a bond different sizes; `states.to_dense` expands over the full physical space and the union of both bond ends.
+- At small D a dense truncation can break a symmetry the dense run started with: from the SU3 product state at θ = π/4, dense EnvBP at D = 2 develops U1×U1-violating rdm elements ~1e-3 and ends at 1.8401, the U1×U1 run at 1.8774. At D = 3 both give 1.6886583 (1e-11). U1 (from FQ at 1.6π and from SU3 at π/4) and Z2×Z2 (from AFQ at 0.35π) agree with dense at D = 2.
+- Small-D cost: U1×U1 EnvBP at D = 3 took 64 s vs 22 s dense for the same run (1×1 blocks, many sectors); the payoff is expected only at large D.
+
 ## Sanity run at the SU(3) point, θ = π/4 (NN only)
 
 h_bond = cos θ S·S + sin θ (S·S)² = (P_swap + 1)/√2, checked as an operator identity (also Σh = (ΣP + N_b)/√2 on the cluster).

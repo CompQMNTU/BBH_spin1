@@ -76,7 +76,7 @@ def nn_gates(geo, model, ops, step):
         if not terms:
             continue
         if len(present) == 3:
-            zero = 0 * operators.ss(ops)
+            zero = 0 * operators.h_bond(ops, 0.0, 0.0)
             H = triangle_hamiltonian(ops, hs.get("v", zero), hs.get("h", zero), hs.get("d", zero))
             gates.append(Gate(G=exp_mpo(step, H), sites=(a, b, c)))
             covered.update(terms.values())

@@ -45,7 +45,7 @@ def pad(psi, D, noise=1e-3, seed=0):
     Existing entries are kept, so a D-1 (or smaller) state is reproduced up to the noise.
     """
     if psi[psi.sites()[0]].config.sym.SYM_ID != "dense":
-        raise NotImplementedError("pad: dense tensors only")
+        raise NotImplementedError("pad: dense tensors only (seed symmetric runs by evolving at D)")
     rng = np.random.default_rng(seed)
     tensors = {}
     for s in psi.sites():
