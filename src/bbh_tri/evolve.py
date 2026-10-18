@@ -58,6 +58,9 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
     chi = default_chi(D) if chi is None else chi
     metric = ENVS[env](psi)
     opts_svd = {"D_total": D, "tol": svd_tol}
+    # NTU: the default initialization "EAT_SVD" keeps metric-null components after path gates and
+    # drifts away from exact states; "EAT" does not (docs/yastn_findings.md, NTU section).
+    step_kwargs = {"initialization": "EAT"} if env == "NTU" else {}
     result = EvolveResult(energy=np.nan, class_energies={})
     t0 = time.time()
 
@@ -70,7 +73,7 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
         E_old, err, converged, step = None, 0.0, False, 0
         while step < max_steps:
             step += 1
-            infos = fpeps.evolution_step_(metric, step_gates, opts_svd=opts_svd)
+            infos = fpeps.evolution_step_(metric, step_gates, opts_svd=opts_svd, **step_kwargs)
             normalize_(psi)
             err = max([err] + [i.truncation_error for i in infos])
             if step % check_every == 0 or step == max_steps:

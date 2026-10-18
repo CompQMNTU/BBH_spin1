@@ -98,3 +98,20 @@ def test_obc_without_full_patch_has_three_sites():
 def test_full_patch_bonds_without_direction_raises():
     with pytest.raises(TypeError):
         fpeps.TriangularLattice(full_patch=True).bonds()
+
+
+@pytest.mark.parametrize("initialization, D_after", [("EAT_SVD", 3), ("EAT", 1)])
+def test_ntu_default_initialization_inflates_bonds_on_path_gates(initialization, D_after):
+    """NTU truncation of a 3-site path gate (triangle MPO) on the exact FM eigenstate: the default
+    'EAT_SVD' picks the SVD initialization, which keeps metric-null components (bond 1 -> 3);
+    'EAT' keeps D = 1. Over hundreds of steps the junk drives the energy up (docs/yastn_findings.md)."""
+    import numpy as np
+    from bbh_tri import gates, lattice, operators, states
+    from bbh_tri.hamiltonian import Model
+    ops = operators.spin1("dense")
+    geo = lattice.geometry("sqrt3")
+    psi = states.product_peps(geo, states.seed_vectors("FM"), ops)
+    tri = gates.nn_gates(geo, Model(0.7 * np.pi), ops, 0.005)[0]
+    fpeps.evolution_step_(fpeps.EnvNTU(psi), [tri], opts_svd={"D_total": 4, "tol": 1e-12},
+                          initialization=initialization)
+    assert max(d for s in psi.sites() for d in psi[s].get_shape()[:4]) == D_after

@@ -58,3 +58,16 @@ Acceptance (SPEC §6 M3):
 - (a) FM region: E = 3(cos θ + sin θ) to 1e-6 at θ = 0.6π, π, 1.2π from random starts at D = 2 (`tests/test_evolve.py`); in the D = 4 scan to ≲1e-9 over 0.525π–1.25π.
 - (b) θ = 0, EnvBP, random start: E = −1.7878 (D = 2), −1.8102 (3), −1.8210 (4), −1.8298 (5), monotonically towards −1.8368(5) (D → ∞, paper) and below the D = 1 value −1.5; m = 0.89, 0.86, 0.84 (D = 2–4). D = 4 took 160 s, D = 5 1.6 h (single thread).
 - (c) 80-point scan, D = 4, EnvBP, lowest energy of five starts (FM, FQ, AFQ, SU3 seeds, random), `docs/figures/m3_scan_D4.png`, data `results/m3_scan_D4.jsonl`: AFM3 0–0.225π (m 0.84 → 0.48), AFQ 0.25–0.475π (m = 0, |Q| up to 1.12), FM 0.5–1.25π (m = 1, |Q| = 1/√3), FQ 1.275–1.875π (m = 0), AFM3 from 1.9π (m = 0.84). Jumps in m and |Q| at π/4, π/2, 5π/4 and between 1.875π and 1.9π (paper: θ_c = 1.873(7)π). SPEC asks for D ≤ 6; only D = 4 is scanned so far (D = 5 takes ~1.6 h per point).
+
+NTU follow-up (2026-10-18): the warm-start NTU scan drifted above EnvBP. In the FM phase the cause is the default `initialization="EAT_SVD"` of `truncate_`, which keeps metric-null components after path gates (docs/yastn_findings.md, NTU section); `evolve` now passes `initialization="EAT"` for NTU, and FM states stay exact over 400 steps. In the AFM3/AFQ phases NTU remains 1e-3 to 1e-2 above EnvBP at D = 4 with either initialization (τ and start-state tests at θ = 0.25π running). The 42 partial NTU scan runs used the faulty setting and are not kept.
+
+## M4 — Full update + AD (in progress, 2026-10-18)
+AD part: `variational.py` (`Chain`: L-BFGS over raw site-tensor data, tensors normalized inside the loss, energy via `measure.class_energies` on torch tensors; checkpoint/resume; `validate` with the numpy backend at χ = D², 2D², 3D²; `pad`, `convert`), `scripts/m4_variational.py` (one chain, resumable), `tests/test_variational.py`. Design and deviations: docs/ad_workflow.md (**[impl]** marks).
+
+Findings:
+- At D = 3 the CTM projector SVDs keep an exactly degenerate pair (~2e-4 σ_max). `fp_ctmrg`'s implicit gradient was wrong by ×10 on one such state; the default is now plain backpropagation through the CTM sweeps (`ad="unrolled"`), with the pair's 0/0 term dropped (`exact_svd_backward(kept_degenerate="zero")`, small pairs only). AD = FD to 2e-8 (docs/yastn_findings.md U4b).
+- torch L-BFGS with `max_iter=1` allows no line-search zoom by default (`max_eval`); fixed in `Chain` (docs/ad_workflow.md §5b).
+
+First result, θ = π/4, √3×√3, dense: D = 3 AD from the EnvBP state gives E = 1.67403 (validated, χ-converged), 0.0145 below EnvBP (1.68856); C₃ spread 1.8e-3. D = 2 stays at the BP minimum (1.84010).
+
+Open (SPEC §6 M4): EnvCTM full update; symmetric configs (U1, Z2×Z2, U1×U1) — needed for the π/4 acceptance (1.632 ± 0.005, U1×U1) and to avoid degenerate pairs at the top of the CTM spectrum; D ladder and θ = 0 extrapolation; FQ/AFM3 hysteresis at 1.86–1.89π; gradient gate near θ ≈ 1.87π; profiling at D ≥ 4 (unrolled memory).

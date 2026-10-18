@@ -16,10 +16,10 @@ def ops():
     return spin1("dense")
 
 
-def _compat_svd(spectrum, keep, seed=0):
+def _compat_svd(spectrum, keep, seed=0, kept_degenerate="warn"):
     """(AD, FD, number of DegenerateSVDWarnings) with the patched SVD backward."""
     from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward
-    with exact_svd_backward(), warnings.catch_warnings(record=True) as w:
+    with exact_svd_backward(kept_degenerate), warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always", DegenerateSVDWarning)
         ad, fd = svd_directional_derivative(spectrum, keep, seed=seed)
     return ad, fd, sum(issubclass(x.category, DegenerateSVDWarning) for x in w)
@@ -203,4 +203,22 @@ def test_active_pair_with_overflowing_gap_warns():
     """Codex review of PR #4 (6th pass): diag(1e-307, 9.9e-308) is well resolved (relative gap 1e-2)
     but 1/gap overflows and would be dropped silently (AD 0 vs true 1 for L = R01 + R10)."""
     _, n_warn = _diag_svd_grad([1e-307, 9.9e-308], 2, 0, lambda R, P: R[0, 1] + R[1, 0])
+    assert n_warn > 0
+
+
+@pytest.mark.ad
+@pytest.mark.parametrize("seed", range(2))
+def test_zero_mode_drops_small_kept_degenerate_pair(seed):
+    """kept_degenerate='zero': a kept pair at 1e-4 sigma_max is zeroed; the dropped 0/0 term costs
+    ~1e-5 relative on this loss (it depends on how the pair splits)."""
+    ad, fd, n_warn = _compat_svd([1, .5, .3, 1e-4, 1e-4, 1e-5], keep=5, seed=seed, kept_degenerate="zero")
+    assert n_warn == 0
+    assert ad == pytest.approx(fd, rel=1e-4)
+
+
+@pytest.mark.ad
+@pytest.mark.parametrize("spectrum,keep", [([1, .7, .7, .3, .2, .1], 4),     # large kept pair
+                                           ([1, .5, 1e-4, 1e-4, 1e-5], 3)])  # small pair straddling the cut
+def test_zero_mode_still_warns_for_large_or_straddling_pairs(spectrum, keep):
+    _, _, n_warn = _compat_svd(spectrum, keep=keep, kept_degenerate="zero")
     assert n_warn > 0

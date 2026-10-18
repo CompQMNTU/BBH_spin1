@@ -30,6 +30,18 @@ import yastn.tn.fpeps as fpeps
 DEGENERACY_RTOL = 1e-10
 
 
+# How svd_backward treats a near-degenerate pair whose two singular vectors BOTH receive gradient
+# (both kept): "warn" (default) or "zero". "zero" drops the pair's 1/(sigma_i - sigma_j) term, whose
+# true value is a 0/0 limit (it vanishes only if the loss does not depend on how the pair splits).
+# That is an approximation with an error of the order of the pair's weight: on a generic
+# gauge-invariant loss, relative error 1e-2 for a pair at 0.7 sigma_max, ~1e-3 at 1e-2, ~5e-6 at
+# 1e-4 (tests/test_yastn_compat.py); CTM at D = 3 with a pair at 2e-4 sigma_max: 2e-8
+# (tests/test_variational.py). So only pairs at sigma <= ZERO_MAX_SIGMA * sigma_max of the block are
+# zeroed; larger kept pairs, and pairs straddling the cut (one vector without gradient), still warn.
+_KEPT_DEGENERATE = "warn"
+ZERO_MAX_SIGMA = 1e-3
+
+
 class DegenerateSVDWarning(RuntimeWarning):
     """Near-degenerate singular values contribute to an SVD gradient, which is then unreliable."""
 
@@ -94,6 +106,12 @@ def svd_backward(ctx, gu, gsigma, gvh):
     # numerically degenerate, or whose sigma, gap or sum has no usable reciprocal, makes the result
     # unreliable.
     near_degenerate = diff.abs() <= DEGENERACY_RTOL * sigma.max()
+    if _KEPT_DEGENERATE == "zero":
+        small = sigma <= ZERO_MAX_SIGMA * sigma.max()
+        both = (near_degenerate & ~eye & active.unsqueeze(-2) & active.unsqueeze(-1)
+                & small.unsqueeze(-2) & small.unsqueeze(-1))
+        F = torch.where(both, torch.zeros_like(F), F)
+        near_degenerate = near_degenerate & ~both
     bad = (pair_active & (near_degenerate | _unsafe(diff) | _unsafe(tot))).any() or (_unsafe(sigma) & active).any()
 
     uh = u.conj().transpose(-2, -1)
@@ -147,12 +165,20 @@ def patch_svd_backward():
 
 
 @contextlib.contextmanager
-def exact_svd_backward():
-    """Context manager form of :func:`patch_svd_backward`; backward() must run inside it."""
-    undo = patch_svd_backward()
+def exact_svd_backward(kept_degenerate="warn"):
+    """Context manager form of :func:`patch_svd_backward`; backward() must run inside it.
+
+    ``kept_degenerate``: "warn" or "zero", see ``_KEPT_DEGENERATE``.
+    """
+    global _KEPT_DEGENERATE
+    if kept_degenerate not in ("warn", "zero"):
+        raise ValueError(kept_degenerate)
+    undo, previous = patch_svd_backward(), _KEPT_DEGENERATE
+    _KEPT_DEGENERATE = kept_degenerate
     try:
         yield
     finally:
+        _KEPT_DEGENERATE = previous
         undo()
 
 
