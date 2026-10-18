@@ -103,7 +103,8 @@ class Chain:
         self.optimizer = torch.optim.LBFGS(self.params, **self.opt_kwargs)
         # what a checkpoint must match to be resumed (load raises otherwise)
         self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": repr(self.ctm_fwd), "ad": ad,
-                     "kept_degenerate": kept_degenerate, "shapes": [tuple(psi[s].get_shape()) for s in self.sites]}
+                     "kept_degenerate": kept_degenerate, "geometry": repr(peps_to_dict(psi).get("geometry")),
+                     "sites": [tuple(s) for s in self.sites], "shapes": [tuple(psi[s].get_shape()) for s in self.sites]}
         self.history = []  # one dict per completed step
         self.checkpoint = checkpoint
         self.n_evals = 0

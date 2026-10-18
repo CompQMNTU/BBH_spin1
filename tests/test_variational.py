@@ -16,6 +16,7 @@ import warnings
 
 import numpy as np
 import pytest
+import yastn.tn.fpeps as fpeps
 
 torch = pytest.importorskip("torch")
 
@@ -128,6 +129,10 @@ def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
         var.Chain(var.convert(psi, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=9).load(str(ck))
     with pytest.raises(ValueError, match="checkpoint"):  # other theta
         var.Chain(var.convert(psi, var.torch_ops().config), Model(0.3), var.torch_ops(), chi=8).load(str(ck))
+    cell = fpeps.TriangularLattice(dims=(1, 3), full_patch=True)  # same tensor shapes, other unit cell
+    other = fpeps.Peps(cell, tensors={s: psi[s] for s in cell.sites()})
+    with pytest.raises(ValueError, match="checkpoint"):
+        var.Chain(var.convert(other, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=8).load(str(ck))
 
 
 @pytest.mark.slow

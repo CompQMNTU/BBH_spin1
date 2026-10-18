@@ -76,6 +76,9 @@ def main():
     if os.path.exists(ck):  # resume: the template defines the tensor structure; load() checks theta, chi, D
         import torch
         template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False)["template"], config=ops.config)
+        D_ck = max(d for s in template.sites() for d in template[s].get_shape()[:4])
+        if D_ck != D:
+            raise SystemExit(f"checkpoint {ck} has D = {D_ck}, not --D {D}")
         chain = var.Chain(template, model, ops, chi, checkpoint=ck, log=print).load(ck)
         print(f"resumed at step {len(chain.history)}", flush=True)
     else:
