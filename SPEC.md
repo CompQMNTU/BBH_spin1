@@ -91,7 +91,7 @@ Energy **per site** using form (1) of the paper (not the J_S/J_Q form, which dif
 ## 3. Reference numbers / acceptance tests
 
 From the paper (Niesen–Corboz 2018):
-- θ = π/4 (SU(3) point): E/site(D→∞) = **1.630(1)**; best finite-D = 1.632 (variational, D=12, SU(3) symmetry exploited). Relation E_BBH = (E_SU(3)+3)/√2.
+- θ = π/4 (SU(3) point): E/site(D→∞) = **1.630(1)**; best finite-D = 1.632 (variational update, D=12). The paper uses "additional symmetries of the Hamiltonian" (global **abelian** symmetries, refs. Singh 2011 / Bauer 2011) to reach D=16 (simple update) and D=12 (full and variational update), without naming the group at π/4; it does **not** use SU(3)-symmetric tensors. Its D→∞ value is the mean of the lowest finite-D energy and a linear fit in 1/D, with error half their difference. Earlier SU(3)-model iPEPS (Bauer et al., PRB 85, 125116 (2012)): 1.646 at D=10, 1.633(14) extrapolated. Relation E_BBH = (E_SU(3)+3)/√2.
 - θ = 0 (Heisenberg): E/site(D→∞) = **−1.8368(5)**; m stays finite.
 - FQ→AFM3 transition: **θ_c = 1.873(7)π** (full update, D ≤ 11 for FQ with U1, D ≤ 9 for AFM3).
 - Other transitions exactly at π/4, π/2, 5π/4; all first order.
@@ -156,7 +156,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 - Ground state at given parameters = lowest energy over all unit cells and initializations (random + phase-seeded + hysteresis from neighbors).
 
 ### 4.5 Symmetry choice
-Symmetries are not needed for correctness; they buy bond dimension (paper: FQ with U(1) to D=11 vs dense AFM3 to D=9; SU(3) benchmark to D=12–16). An imposed symmetry forbids its spontaneous breaking, so pick per phase:
+Symmetries are not needed for correctness; they buy bond dimension (paper: FQ with U(1) to D=11 vs dense AFM3 to D=9; SU(3) point to D=12 (full/variational) and D=16 (simple update) with abelian symmetries). An imposed symmetry forbids its spontaneous breaking, so pick per phase:
 
 | Phase / state | On-site symmetry | YASTN | Notes |
 |---|---|---|---|
@@ -164,7 +164,7 @@ Symmetries are not needed for correctness; they buy bond dimension (paper: FQ wi
 | FQ (director ∥ z, \|0⟩) | U(1) | `Spin1(sym='U1')` | as in the paper |
 | AFQ (directors x, y, z) | **Z₂×Z₂** = {e^{iπSx}, e^{iπSy}, e^{iπSz}} (commute for integer spin) | custom: no built-in Z2xZ2 in yastn/sym (has Z2, Z3, U1, U1xU1, Z2xU1, U1xU1xZ2) → define one by subclassing `sym_abelian` (model: `sym_Z2xU1.py`); operators written in the \|x⟩,\|y⟩,\|z⟩ basis. Fallback: `make_config(sym='Z2')` = Sz parity only | \|x⟩,\|y⟩,\|z⟩ are joint eigenstates (charges (0,1),(1,0),(1,1) up to convention); \|x⟩,\|y⟩ mix Sz=±1; not U(1) |
 | AFM3, 120° coplanar | none | `dense` | coplanar order breaks every U(1); no on-site Z_n leaves it invariant |
-| SU(3) point θ=π/4 | U(1)×U(1) (flavor counts) | custom config | choose degenerate state with sublattices \|+1⟩,\|0⟩,\|−1⟩; only way to approach D≈12–16 |
+| SU(3) point θ=π/4 | U(1)×U(1) (flavor counts) | custom config | choose degenerate state with sublattices \|+1⟩,\|0⟩,\|−1⟩; largest abelian subgroup of SU(3); presumably what the paper's D=12–16 runs used (not stated there) |
 | NNN: collinear stripe / up-up-down | U(1) | `Spin1(sym='U1')` | collinear along z |
 | NNN: tetrahedral (4-sublattice, non-coplanar) | none | `dense` | needs a (2,2)-compatible cell (§4.4); reported by Szasz et al. (§7) |
 | NNN: disordered / spin-liquid candidate | U(1) | `Spin1(sym='U1')` | largest payoff (large D needed) |
@@ -226,7 +226,7 @@ Every saved result records: model params, unit cell, D, χ, τ schedule, symmetr
 
 **M3 — NN imaginary-time evolution.** Triangle-gate simple update (EnvBP) and NTU; √3×√3 cell. *Accept:* (a) FM region energies = 3(cosθ+sinθ); (b) θ=0 at D=4–6 gives E below the D=1 value and approaches −1.84 trend; (c) 80-point θ scan at D≤6 shows the four phases with jumps in m and |Q| at π/4, π/2, 5π/4, and near the FQ/AFM3 boundary (paper: 1.873(7)π; small-D simple update may shift it) (paper Fig. 5 qualitatively).
 
-**M4 — Full update + AD, symmetries, benchmarks.** EnvCTM-metric FU and `fp_ctmrg` variational optimization following `docs/ad_workflow.md` (its gradient gate §5 must pass first); add the symmetry switch of §4.5 (U1, custom Z2×Z2, U1×U1) with its dense-agreement tests. *Accept:* θ=π/4 energy within 0.005 of 1.632 **with the U1×U1 config** (the paper needed SU(3) symmetry and D=12; dense alone is not expected to reach this — record the dense value as a separate data point); θ=0 extrapolation consistent with −1.8368(5) within combined error; FQ (U1) vs AFM3 (dense) hysteresis at θ = 1.86–1.89π gives θ_c within 1.873(7)π.
+**M4 — Full update + AD, symmetries, benchmarks.** EnvCTM-metric FU and `fp_ctmrg` variational optimization following `docs/ad_workflow.md` (its gradient gate §5 must pass first); add the symmetry switch of §4.5 (U1, custom Z2×Z2, U1×U1) with its dense-agreement tests. *Accept:* θ=π/4 D→∞ extrapolation of the **U1×U1** energies (D ladder, the paper's method: mean of the lowest finite-D energy and a linear fit in 1/D, error half their difference) consistent with 1.630(1) within combined error (record dense values as separate data points); θ=0 extrapolation consistent with −1.8368(5) within combined error; FQ (U1) vs AFM3 (dense) hysteresis at θ = 1.86–1.89π gives θ_c within 1.873(7)π.
 
 **M5 — NNN extension.** Add J₂, K₂ gates and measurements. *Accept:* (a) routing tests for (1,1), (−1,2), (2,−1) pass against ED on a small OBC patch; (b) D=1 energies with J₂ match an independent product-state minimizer (NNN contributes Σ_sublattices h₂(A,A) per site in the √3×√3 cell); (c) energy invariant under the two choices of gate path at convergence (within truncation error).
 

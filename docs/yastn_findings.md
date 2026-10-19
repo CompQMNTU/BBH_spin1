@@ -143,7 +143,7 @@ Initial state: |+1⟩,|0⟩,|−1⟩ on the three sublattices plus small noise. 
 | D=3, EnvBP | χ=9 / 14 | 1.68856206 / 1.68856202 | 0.5620 / 0.5621 / 0.5644 | 2.5e-3 |
 | D=3, EnvNTU (**stopped**, 5 steps only) | χ=9 | 1.7075 | — | — |
 
-Reference: Niesen–Corboz D→∞ 1.630(1); best finite-D 1.632 (D=12, SU(3)-symmetric).
+Reference: Niesen–Corboz D→∞ 1.630(1); best finite-D 1.632 (D=12, variational update, abelian symmetries; no SU(3)-symmetric tensors, see SPEC §3).
 
 Notes:
 - The ED row is an operator check only. With 16 bonds on 9 sites it is not comparable per site with the infinite lattice.
