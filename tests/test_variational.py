@@ -12,7 +12,11 @@ the tensors). There:
 At D = 2 (no degeneracy) both AD modes agree with finite differences.
 """
 
+import os
+import subprocess
+import sys
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,6 +31,7 @@ from bbh_tri.yastn_compat import DegenerateSVDWarning, exact_svd_backward  # noq
 pytestmark = pytest.mark.ad
 
 THETA = np.pi / 4
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def bp_state(D, seed=1, steps=40):
@@ -258,3 +263,43 @@ def test_validate_reports_energy_per_chi():
     assert out["c3_spread"] == max(nn) - min(nn)  # diagnostics at the largest chi, not the last given
     assert abs(out["energies"][8] - out["energies"][4]) < 1e-2
     assert out["c3_spread"] >= 0 and len(out["order"]) == 3
+
+
+gpu = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA (uv sync --extra cuda)")
+
+
+@pytest.mark.gpu
+@gpu
+def test_chain_on_cuda_matches_cpu_and_resumes_a_cpu_checkpoint(tmp_path):
+    """A chain whose config has default_device='cuda' keeps every tensor on the GPU (step, FD check,
+    perturb, load of a CPU checkpoint) and reproduces the CPU chain to roundoff; random directions
+    and perturbations come from the same CPU generator on both devices."""
+    psi = bp_state(2, steps=20)
+    ck = tmp_path / "chain.pt"
+    cpu = chain(psi, 2, checkpoint=str(ck))
+    cpu.step()
+    gops = var.torch_ops(device="cuda")
+    dev = var.Chain(var.convert(psi, gops.config), Model(THETA), gops, chi=8).load(str(ck))
+    assert all(p.is_cuda for p in dev.params)
+    a, b = cpu.step(), dev.step()
+    assert abs(a["energy"] - b["energy"]) < 1e-12
+    assert all(p.is_cuda for p in dev.params)
+    assert all(torch.allclose(p, q.cpu(), rtol=1e-8, atol=1e-12) for p, q in zip(cpu.params, dev.params))
+    ok_c, checks_c, _ = cpu.check_gradient(seed=5)
+    ok_d, checks_d, _ = dev.check_gradient(seed=5)
+    assert ok_c and ok_d
+    assert np.allclose(checks_c, checks_d, rtol=1e-6, atol=1e-12)
+    cpu.perturb(seed=7)
+    dev.perturb(seed=7)
+    assert all(p.is_cuda for p in dev.params)
+    assert all(torch.allclose(p, q.cpu(), rtol=1e-8, atol=1e-12) for p, q in zip(cpu.params, dev.params))
+    assert dev.numpy_peps()[dev.sites[0]].config.backend.BACKEND_ID == "np"
+    # a GPU checkpoint resumes where CUDA is absent (e.g. to validate on a CPU node)
+    gck = tmp_path / "gpu.pt"
+    dev.save(str(gck))
+    code = (f"import torch; import tests.test_variational as t; assert not torch.cuda.is_available(); "
+            f"c = t.chain(t.bp_state(2, steps=20), 2).load({str(gck)!r}); "
+            f"assert all(p.device.type == 'cpu' for p in c.params); c.step()")
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": ""}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, cwd=ROOT)
+    assert out.returncode == 0, out.stderr[-2000:]

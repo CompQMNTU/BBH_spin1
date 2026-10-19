@@ -92,6 +92,7 @@ def main():
     p.add_argument("--rng", type=int, default=0)
     p.add_argument("--threads", type=int, default=1, help="BLAS/OpenMP/torch threads (pays for dense only)")
     p.add_argument("--max-sweeps", type=int, default=100, help="CTM sweeps per evaluation (bounds AD memory)")
+    p.add_argument("--device", default="cpu", help="torch device for the AD chain, e.g. cuda:0")
     a = p.parse_args()
 
     import torch
@@ -107,10 +108,10 @@ def main():
     model = Model(theta)
     D, chi = a.D, a.chi or 2 * a.D * a.D
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    ops = var.torch_ops(a.sym)
+    ops = var.torch_ops(a.sym, device=a.device)
     ck = a.out + ".pt"
     if os.path.exists(ck):  # resume: the template defines the tensor structure; load() checks theta, chi, D
-        template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False)["template"], config=ops.config)
+        template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False, map_location=a.device)["template"], config=ops.config)
         D_ck = max(d for s in template.sites() for d in template[s].get_shape()[:4])
         if D_ck != D:
             raise SystemExit(f"checkpoint {ck} has D = {D_ck}, not --D {D}")

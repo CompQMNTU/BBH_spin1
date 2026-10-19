@@ -10,13 +10,15 @@ Python via **uv only**. Never pip/conda into the env.
 ```
 uv sync                                # base env (numpy backend)
 uv sync --extra ad                     # + torch (CPU wheel index) for AD / fp_ctmrg
+uv sync --extra cuda                   # same torch from the CUDA 13.0 index (GPU nodes); conflicts with `ad`
 uv run pytest -q                       # default suite, skips `slow` (~2.5 min under load)
 uv run pytest -m "slow or not slow"    # everything incl. FD gradient checks and M3 evolution (~8 min under load)
 uv run pytest -m slow                  # slow only (ED, gradient checks)
 uv run pytest tests/test_routing.py -k "diag and BP"   # single test selection
 ```
 
-Markers: `slow` (deselected by default via `addopts`), `ad` (needs `--extra ad`).
+Markers: `slow` (deselected by default via `addopts`), `ad` (needs `--extra ad` or `--extra cuda`), `gpu` (needs `--extra cuda` and a GPU; skipped otherwise).
+`uv run` re-syncs the env to the extras it is given: in a CUDA env, run everything as `uv run --extra cuda ...`.
 `tests/conftest.py` pins OMP/OPENBLAS/MKL to 1 thread; do the same in any script or SLURM job.
 Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 
@@ -26,7 +28,7 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 - `docs/yastn_findings.md`: verified YASTN behavior and bugs at the pinned commit. `docs/ad_workflow.md`: design of the AD/fp_ctmrg ground-state workflow.
 - `src/bbh_tri/`: the package. `lattice.py` (bond classes, paths, geometries), `operators.py` (S·S, (S·S)², Q; dense, U1, and U1xU1/Z2xZ2 via `SymSpin1`), `hamiltonian.py` (`Model`), `states.py` (product states, mean-field minimizer, `to_dense`), `measure.py` (CTM energies per class, m, |Q|), `gates.py` (triangle-MPO gates, Trotter), `evolve.py` (imaginary-time driver, EnvBP/EnvNTU), `variational.py` (AD/L-BFGS chains, validation), `yastn_compat.py` (workarounds for YASTN bugs). Remaining modules of SPEC §5 are added milestone by milestone.
 - `docs/milestones.md`: a short note per finished milestone (design decisions, open items).
-- `scripts/`: production runs (`m3_theta_scan.py`, resumable JSONL output; `m4_variational.py`, one resumable AD chain, needs `--extra ad`) and plots (`m3_plot_scan.py`, run with `uv run --with matplotlib`). `results/`: scan data; `docs/figures/`: plots.
+- `scripts/`: production runs (`m3_theta_scan.py`, resumable JSONL output; `m4_variational.py`, one resumable AD chain, needs `--extra ad` or `--extra cuda` with `--device cuda:N`) and plots (`m3_plot_scan.py`, run with `uv run --with matplotlib`). `results/`: scan data; `docs/figures/`: plots.
 - `tests/`: `test_lattice.py`, `test_operators.py`, `test_hamiltonian.py` (M1), `test_product_states.py` (M2), `test_gates.py`, `test_evolve.py` (M3), `test_variational.py` (M4 AD), `test_symmetry.py` (M4 symmetry switch), `test_routing.py` (U1), `test_measure.py` (U2), `test_fp_ctmrg.py` (U4), `test_yastn_canaries.py` (pins current upstream behavior, including bugs), `test_yastn_compat.py` (our workarounds), `yastn_utils.py` (test-only helpers).
 
 ## Working rules
@@ -38,6 +40,7 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 - When YASTN behavior is uncertain, write a minimal test, record the result in `docs/yastn_findings.md`, and add a canary to `tests/test_yastn_canaries.py`. If a canary fails after a yastn bump, update the findings and SPEC §1 before the test.
 - yastn is pinned to a git commit in `pyproject.toml`; all findings refer to that commit.
 - Numpy backend for evolution, torch only for AD; never mix configs in one state.
+- GPU AD: `variational.torch_ops(device="cuda:N")` / `m4_variational.py --device cuda:N` (the device lives in the yastn config). Dense D = 4: ~5× faster per evaluation than one CPU thread, same results to roundoff, ~8 GB GPU memory. Random tensors (`fd_check`, `perturb`) are drawn on the CPU generator and moved, so CPU and GPU runs see identical draws; checkpoints load on either device. `validate` stays numpy/CPU. Export `CUDA_DEVICE_ORDER=PCI_BUS_ID`: torch numbers GPUs fastest-first by default, so `cuda:N` need not be `nvidia-smi` GPU N (on dgxsa1h torch `cuda:3` was GPU 4). dgxsa1h: A100s are `nvidia-smi` GPUs 0, 1, 2, 4; GPU 3 is the 4 GB DGX Display. `--threads` sets the CPU-side threads only.
 
 ## YASTN pitfalls (details: docs/yastn_findings.md)
 
