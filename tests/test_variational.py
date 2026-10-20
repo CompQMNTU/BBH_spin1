@@ -229,6 +229,26 @@ def test_chain_lowers_energy_and_resumes_deterministically(tmp_path):
         var.Chain(var.convert(other, var.torch_ops().config), Model(THETA), var.torch_ops(), chi=8).load(str(ck))
 
 
+def test_chain_records_sweeps_and_resumes_with_other_max_sweeps(tmp_path):
+    """max_sweeps bounds the unrolled-AD memory, not the fixed point: a checkpoint resumes with any value."""
+    from yastn.tn.fpeps.envs.fixed_pt import NoFixedPointError
+    psi = bp_state(2, steps=20)
+    ck = tmp_path / "chain.pt"
+    ch = chain(psi, 2, checkpoint=str(ck))
+    e = ch.step()
+    assert len(e["ctm_sweeps"]) == e["evals"] and all(0 < s < 500 for s in e["ctm_sweeps"])
+    capped = chain(psi, 2, max_sweeps=1).load(str(ck))
+    assert capped.history == ch.history
+    with pytest.raises(NoFixedPointError):  # one sweep cannot converge the CTM
+        capped.loss()
+    assert capped.sweeps == [1]
+    old = torch.load(ck, weights_only=False)  # checkpoints written while max_sweeps was in the meta
+    old["meta"]["ctm"] = old["meta"]["ctm"].replace("'corner_tol': 1e-09, ", "'corner_tol': 1e-09, 'max_sweeps': 500, ")
+    assert "'max_sweeps': 500" in old["meta"]["ctm"]
+    torch.save(old, ck)
+    assert chain(psi, 2, max_sweeps=50).load(str(ck)).history == ch.history
+
+
 @pytest.mark.slow
 def test_validate_reports_energy_per_chi():
     psi = bp_state(2, steps=20)
