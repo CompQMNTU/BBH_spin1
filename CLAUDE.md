@@ -57,7 +57,8 @@ Planned CLI (not implemented yet): `uv run bbh-run config.yaml`.
 
 - Commit, push, open PRs and merge only when asked. Branch off `main`.
 - **A PR may be merged only after a Codex review has cleared.** Run it on the final PR head, then verify each finding against the code. Fix real ones on the same branch and re-review; record dismissed ones with a reason in a PR comment. Merge only when no unresolved findings remain, even if the user asks to merge earlier: report the outstanding findings instead.
-- Running Codex here: its bubblewrap sandbox cannot start on this machine, so `codex review --base main` cannot read the repo. Pass the diff inline instead (omit `uv.lock`):
+- Requesting the review on GitHub (works from any machine, including dgxsa1h, which has no `codex` CLI): `gh pr comment N --body "@codex review"` after the final push. Codex replies on the PR; read its review and comments with `gh pr view N --comments` and `gh api repos/CompQMNTU/BBH_spin1/pulls/N/comments`. Check that the review refers to the current head, and request it again after every push.
+- Running Codex locally (where the CLI is installed): its bubblewrap sandbox cannot start there, so `codex review --base main` cannot read the repo. Pass the diff inline instead (omit `uv.lock`):
   ```
   { echo "Review this PR of CompQMNTU/BBH_spin1. Your shell sandbox is unavailable; CLAUDE.md and the diff are inline. Report concrete defects (physics/maths errors, wrong claims, bugs, test gaps) with file:line, most severe first."
     echo "=== CLAUDE.md ==="; cat CLAUDE.md
