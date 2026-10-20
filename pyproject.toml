@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ad = ["torch"]
+cuda = ["torch"]
 
 [dependency-groups]
 dev = ["pytest"]
@@ -31,16 +32,29 @@ testpaths = ["tests"]
 markers = [
     "slow: long-running tests (ED, evolution); run with -m slow",
     "ad: needs torch (uv sync --extra ad)",
+    "gpu: needs CUDA torch and a GPU (uv sync --extra cuda); skipped otherwise",
 ]
 addopts = "-m 'not slow'"
 
 [tool.uv.sources]
 yastn = { git = "https://github.com/yastn/yastn", rev = "7ed8ad0e6fd849bae5ecaf545a8d3d5027005501" }
-torch = { index = "pytorch-cpu" }
+# torch for AD: `--extra ad` from the CPU-only wheel index (avoids pulling CUDA), `--extra cuda`
+# from the CUDA 13.0 index (needs an NVIDIA driver >= 580). Same torch version on both.
+torch = [
+    { index = "pytorch-cpu", extra = "ad" },
+    { index = "pytorch-cu130", extra = "cuda" },
+]
 
-# torch from the CPU-only wheel index (avoids pulling CUDA); switch for GPU nodes.
+[tool.uv]
+conflicts = [[{ extra = "ad" }, { extra = "cuda" }]]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 

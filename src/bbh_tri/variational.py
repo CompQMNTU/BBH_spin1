@@ -36,8 +36,9 @@ def convert(psi, config):
     return fpeps.Peps.from_dict(peps_to_dict(psi), config=config)
 
 
-def torch_ops(sym="dense", dtype="float64"):
-    return operators.spin1(sym, backend="torch", default_dtype=dtype)
+def torch_ops(sym="dense", dtype="float64", device="cpu"):
+    """Spin-1 operators with a torch config on ``device`` (e.g. 'cuda:0'); tensors made from it live there."""
+    return operators.spin1(sym, backend="torch", default_dtype=dtype, default_device=device)
 
 
 def pad(psi, D, noise=1e-3, seed=0):
@@ -86,7 +87,7 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
     gen = torch.Generator().manual_seed(seed)
     dirs = [[g / gnorm for g in grads]] if gnorm > 0 else []  # a zero gradient has no direction
     for _ in range(n_random):
-        v = [torch.randn(p.shape, generator=gen, dtype=p.dtype) for p in params]
+        v = [torch.randn(p.shape, generator=gen, dtype=p.dtype).to(p.device) for p in params]
         n = torch.sqrt(sum((x.abs() ** 2).sum() for x in v))
         dirs.append([x / n for x in v])
     x0 = [p.detach().clone() for p in params]
@@ -276,7 +277,7 @@ class Chain:
         g = self.torch.Generator().manual_seed(len(self.history) if seed is None else seed)
         with self.torch.no_grad():
             for p in self.params:
-                p.add_(noise * p.norm() / p.numel() ** 0.5 * self.torch.randn(p.shape, generator=g, dtype=p.dtype))
+                p.add_(noise * p.norm() / p.numel() ** 0.5 * self.torch.randn(p.shape, generator=g, dtype=p.dtype).to(p.device))
         self.reset_optimizer()
 
     def reset_optimizer(self):
@@ -362,7 +363,7 @@ class Chain:
         os.replace(tmp, path)
 
     def load(self, path):
-        d = self.torch.load(path, weights_only=False)
+        d = self.torch.load(path, weights_only=False, map_location=self.params[0].device)
         meta = dict(d.get("meta") or {})
         if "ctm" in meta:  # checkpoints written before max_sweeps left the meta
             meta["ctm"] = re.sub(r"'max_sweeps': \d+, ", "", meta["ctm"])
