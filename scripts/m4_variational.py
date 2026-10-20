@@ -13,7 +13,13 @@ padded, so a symmetric run needs ``bp:NAME`` with a compatible seed (e.g. U1xU1:
 bp:AFQ, U1: bp:FQ) or a pickle saved with the same symmetry at bond dimension D.
 Writes OUT.pt (checkpoint; resumed if present, an error if it was made for another theta, chi or D),
 OUT.pkl (final numpy state) and OUT.json
-(history, validation at chi = D^2, 2D^2, 3D^2).
+(history, validation at chi = 2D^2, 3D^2, 4D^2).
+
+``--chi`` defaults to 3 D^2. At 2 D^2 the cut can fall inside a near-degenerate group of
+environment singular values; the gap-safe truncation keeps or drops the group whole, so the loss
+jumps by ~1e-7 (U1xU1, D = 5) where the grouping changes along a search direction. That is as large
+as the per-step gains near convergence, and the line search stalls (docs/ad_workflow.md §2).
+A checkpoint resumes only at its own chi; to change chi, seed a new chain with the state.
 
 ``--threads N`` (default 1) sets the BLAS/OpenMP and torch intra-op threads. It pays only for dense
 configs (D = 4: 2.3x at 4 threads, nothing more at 8); U1xU1 spends its time in per-block Python
@@ -86,7 +92,7 @@ def main():
     p.add_argument("--seed", required=True, help="pickle path | bp | bp:NAME | FM | FQ | AFQ | SU3 | random")
     p.add_argument("--sym", default="dense", help="dense | U1 | U1xU1 | Z2xZ2")
     p.add_argument("--out", required=True, help="output prefix")
-    p.add_argument("--chi", type=int, default=None, help="optimization chi (default 2 D^2)")
+    p.add_argument("--chi", type=int, default=None, help="optimization chi (default 3 D^2)")
     p.add_argument("--max-steps", type=int, default=200)
     p.add_argument("--noise", type=float, default=1e-3)
     p.add_argument("--rng", type=int, default=0)
@@ -106,7 +112,7 @@ def main():
 
     theta = np.pi * a.theta_over_pi
     model = Model(theta)
-    D, chi = a.D, a.chi or 2 * a.D * a.D
+    D, chi = a.D, a.chi or 3 * a.D * a.D
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     ops = var.torch_ops(a.sym, device=a.device)
     ck = a.out + ".pt"
@@ -126,7 +132,7 @@ def main():
     psi = chain.numpy_peps()
     with open(a.out + ".pkl", "wb") as f:
         pickle.dump(peps_to_dict(psi), f)
-    val = var.validate(psi, model, [D * D, 2 * D * D, 3 * D * D])
+    val = var.validate(psi, model, [2 * D * D, 3 * D * D, 4 * D * D])
     rec = {"theta_over_pi": a.theta_over_pi, "D": D, "chi_opt": chi, "seed": a.seed, "sym": a.sym, "noise": a.noise,
            "rng": a.rng, "threads": a.threads, "max_sweeps": a.max_sweeps, "status": status, "energy_opt": chain.history[-1]["energy"] if chain.history else None,
            "validation": {**val, "order": {str(k): v for k, v in val["order"].items()}},

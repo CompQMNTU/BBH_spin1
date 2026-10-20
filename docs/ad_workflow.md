@@ -29,7 +29,7 @@ model:    {theta: 0.25pi, J2: 0.0, K2: 0.0}
 cell:     {type: sqrt3, dims: [3, 3], full_patch: false}
 psi:      {D: 3, sym: dense, dtype: float64}   # complex128 only if a seed needs it
 seed:     {kind: from_file|product|bp|pad|random, path: ..., noise: 1.0e-3, rng: 17}
-ctm_opt:  {chi: 2D², method: 2x2, corner_tol: 1.0e-8, max_sweeps: 200,
+ctm_opt:  {chi: 3D², method: 2x2, corner_tol: 1.0e-8, max_sweeps: 200,
            svd_policy: fullrank, multiplets: true, init: warm|dl|eye}
 optim:    {method: lbfgs, max_steps: 300, history: 20, line_search: strong_wolfe,
            tol_E: 1.0e-8, tol_E_window: 10, tol_grad: 1.0e-6}
@@ -38,6 +38,18 @@ runtime:  {threads: 1, device: cpu, checkpoint_every: 1}
 ```
 
 χ_opt = 2D² is a starting point. The validation stage (§4) decides whether that was enough.
+
+**[impl] χ_opt = 3D² (2026-10-20).** At 2D² the optimization stalls near convergence. Measured at a U1×U1 D = 5 state:
+- The AD slope along −g matches central differences exactly for h ≤ 3e-5.
+- For h = 1e-4, 3e-4 and 1e-3 it misses them by 23%, 8% and 2%, always by the same energy offset of ~2e-7: a step discontinuity of the loss along the line.
+- Running the CTM to 200 sweeps instead of 14 leaves the energies unchanged, so this is not convergence noise.
+- At χ = 75 (3D²) AD and FD agree to 4 digits for every h, and the optimization energy moves by 1.1e-5 (1.6493344 → 1.6493235).
+
+The cause: at 2D² the cut lies inside a near-degenerate group (relative splitting < `eps_multiplet`). `gap_safe_truncation` keeps or drops the group whole, so the kept set changes discretely where the grouping or the χ boundary changes along a search direction. Near convergence the jumps (~1e-7) match the per-step gains, so strong-Wolfe line searches take many evaluations (D = 6: 19 for one step) and progress crawls (D = 4: ~1.6e-7 per step at |g| ~ 1e-3).
+
+Tested and ruled out at D = 4: resetting L-BFGS, renormalizing the tensors to unit norm, history 100. Each did worse than continuing. In U1×U1 at D = 5, a step at χ = 3D² costs about the same as at 2D² (~175 s): the environment rank is set by the spectrum, not χ.
+
+`scripts/m4_variational.py` now defaults to 3D².
 
 ## 3. Inner loop (closure evaluated by the optimizer)
 
