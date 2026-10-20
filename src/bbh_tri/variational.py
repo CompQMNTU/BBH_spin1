@@ -16,6 +16,7 @@ import contextlib
 import dataclasses
 import io
 import os
+import re
 import time
 import warnings
 
@@ -110,7 +111,12 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
 class Chain:
     """L-BFGS optimization of the site tensors of ``psi`` (torch config) for ``model``.
 
-    CTM: method '2x2', bond dimension ``chi``, ``corner_tol``, ``max_sweeps``; projectors truncated by
+    CTM: method '2x2', bond dimension ``chi``, ``corner_tol``, ``max_sweeps`` (unrolled AD keeps every
+    sweep for the backward pass: ~0.1 GB per sweep for U1xU1 at D = 5, ~0.75 GB for dense at D = 4;
+    converged evaluations take 12-21 sweeps, while an L-BFGS trial point where the CTM does not
+    converge would run to the cap, so the cap bounds the memory; such an evaluation raises
+    NoFixedPointError and :meth:`run` retries the step; ``history`` entries record the sweeps of each
+    evaluation in ``ctm_sweeps``); projectors truncated by
     ``yastn_compat.gap_safe_truncation`` (multiplets with relative splitting < ``eps_multiplet`` are
     kept or dropped whole: at D = 4 a cut through one made CTM cycle); ``svd_tol`` must be > 0
     and well above roundoff (kept exact zeros give undetectable wrong gradients; a cut among
@@ -123,7 +129,7 @@ class Chain:
     ``fd_rtol`` * |g| (plus FD noise) fails the step.
     """
 
-    def __init__(self, psi, model, ops, chi, corner_tol=1e-9, max_sweeps=500, svd_tol=1e-8,
+    def __init__(self, psi, model, ops, chi, corner_tol=1e-9, max_sweeps=100, svd_tol=1e-8,
                  eps_multiplet=1e-6, kept_degenerate="zero", ad="unrolled", history=20, lr=1.0, max_ls=20,
                  fd_check_every=10, fd_rtol=1e-3, checkpoint=None, log=None):
         import torch
@@ -153,7 +159,9 @@ class Chain:
         self.optimizer = torch.optim.LBFGS(self.params, **self.opt_kwargs)
         # what a checkpoint must match to be resumed (load raises otherwise)
         self.fd_check_every, self.fd_rtol, self._last_fd_step = fd_check_every, fd_rtol, None
-        self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": repr(self.ctm_fwd), "ad": ad,
+        # max_sweeps only bounds the work (and, unrolled, the memory) per evaluation; it does not
+        # change the fixed point, so a checkpoint may be resumed with another value
+        self.meta = {"model": dataclasses.asdict(model), "chi": chi, "ctm": _ctm_meta(self.ctm_fwd), "ad": ad,
                      "optimizer": repr(self.opt_kwargs),
                      "kept_degenerate": kept_degenerate, "geometry": repr(peps_to_dict(psi).get("geometry")),
                      "sites": [tuple(s) for s in self.sites], "shapes": [tuple(psi[s].get_shape()) for s in self.sites],
@@ -161,6 +169,7 @@ class Chain:
         self.history = []  # one dict per completed step
         self.checkpoint = checkpoint
         self.n_evals = 0
+        self.sweeps = []  # CTM sweeps of every unrolled evaluation (memory grows with them)
 
     # ---- state ------------------------------------------------------------------------
     def peps(self, detach=False):
@@ -195,6 +204,7 @@ class Chain:
             o = self.ctm_fwd
             info = env.iterate_(opts_svd=o["opts_svd"], method=o["method"], max_sweeps=o["max_sweeps"],
                                 corner_tol=o["corner_tol"], use_qr=o["use_qr"], truncation_f=self.truncation_f)
+            self.sweeps.append(info.sweeps)
             if not info.converged:
                 raise NoFixedPointError(code=1, message=f"CTM not converged: {info}")
         self.n_evals += 1
@@ -221,7 +231,7 @@ class Chain:
     # ---- optimization -----------------------------------------------------------------
     def step(self):
         """One L-BFGS iteration; returns the log entry. Raises RECOVERABLE / NoFixedPointError."""
-        t0, n0, z0 = time.time(), self.n_evals, zeroed_pairs()
+        t0, n0, z0, s0 = time.time(), self.n_evals, zeroed_pairs(), len(self.sweeps)
         with exact_svd_backward(self.kept_degenerate), warnings.catch_warnings():
             warnings.simplefilter("error", DegenerateSVDWarning)
             self.optimizer.step(self._closure)
@@ -235,7 +245,7 @@ class Chain:
         # accepted point involved zeroing (kept with the cached gradient, also when it is reused)
         entry = {"step": len(self.history) + 1, "energy": E, "class_energies": by_class,
                  "grad_norm": g, "evals": self.n_evals - n0, "zeroed_pairs": zeroed_pairs() - z0,
-                 "zeroed_grad": zeroed_grad}
+                 "zeroed_grad": zeroed_grad, "ctm_sweeps": self.sweeps[s0:]}
         if zeroed_grad and (self._last_fd_step is None
                                       or entry["step"] - self._last_fd_step >= self.fd_check_every):
             ok, checks, tol = self.check_gradient(seed=entry["step"])
@@ -248,7 +258,7 @@ class Chain:
         self.history.append(entry)
         if self.log:
             self.log(f"step {entry['step']} E={entry['energy']:.10f} |g|={g:.2e} evals={entry['evals']} "
-                     f"t={entry['time']:.1f}s {entry['class_energies']}")
+                     f"sweeps={entry['ctm_sweeps']} t={entry['time']:.1f}s {entry['class_energies']}")
         if self.checkpoint:
             self.save(self.checkpoint)
         return entry
@@ -353,7 +363,10 @@ class Chain:
 
     def load(self, path):
         d = self.torch.load(path, weights_only=False)
-        if d.get("meta") != self.meta:
+        meta = dict(d.get("meta") or {})
+        if "ctm" in meta:  # checkpoints written before max_sweeps left the meta
+            meta["ctm"] = re.sub(r"'max_sweeps': \d+, ", "", meta["ctm"])
+        if meta != self.meta:
             raise ValueError(f"checkpoint {path} was made for {d.get('meta')}, not {self.meta}")
         with self.torch.no_grad():
             for p, q in zip(self.params, d["params"]):
@@ -363,6 +376,10 @@ class Chain:
         self.n_evals = d["n_evals"]
         self._last_fd_step = d["last_fd_step"]
         return self
+
+
+def _ctm_meta(ctm):
+    return repr({k: v for k, v in ctm.items() if k != "max_sweeps"})
 
 
 def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500, eps_multiplet=1e-6):

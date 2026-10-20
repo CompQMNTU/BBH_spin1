@@ -14,14 +14,31 @@ bp:AFQ, U1: bp:FQ) or a pickle saved with the same symmetry at bond dimension D.
 Writes OUT.pt (checkpoint; resumed if present, an error if it was made for another theta, chi or D),
 OUT.pkl (final numpy state) and OUT.json
 (history, validation at chi = D^2, 2D^2, 3D^2).
+
+``--threads N`` (default 1) sets the BLAS/OpenMP and torch intra-op threads. It pays only for dense
+configs (D = 4: 2.3x at 4 threads, nothing more at 8); U1xU1 spends its time in per-block Python
+loops and gains nothing. Keep the node's total within its worker budget.
+``--max-sweeps`` caps the CTM sweeps per evaluation. Unrolled AD keeps every sweep for the
+backward pass, so memory grows with the sweep count; an evaluation that does not converge within
+the cap fails the step, which is retried after a perturbation. The log records the sweeps of each
+evaluation. A checkpoint may be resumed with another --max-sweeps.
 """
 
+import argparse
 import os
 
-for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-    os.environ[_v] = "1"
 
-import argparse
+def _threads(argv):
+    """--threads before numpy/torch load (BLAS reads these variables once, at import)."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--threads", type=int, default=1)
+    return p.parse_known_args(argv)[0].threads
+
+
+THREADS = _threads(None)
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ[_v] = str(THREADS)
+
 import json
 import pickle
 
@@ -73,7 +90,12 @@ def main():
     p.add_argument("--max-steps", type=int, default=200)
     p.add_argument("--noise", type=float, default=1e-3)
     p.add_argument("--rng", type=int, default=0)
+    p.add_argument("--threads", type=int, default=1, help="BLAS/OpenMP/torch threads (pays for dense only)")
+    p.add_argument("--max-sweeps", type=int, default=100, help="CTM sweeps per evaluation (bounds AD memory)")
     a = p.parse_args()
+
+    import torch
+    torch.set_num_threads(a.threads)
 
     import yastn.tn.fpeps as fpeps
 
@@ -88,23 +110,24 @@ def main():
     ops = var.torch_ops(a.sym)
     ck = a.out + ".pt"
     if os.path.exists(ck):  # resume: the template defines the tensor structure; load() checks theta, chi, D
-        import torch
         template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False)["template"], config=ops.config)
         D_ck = max(d for s in template.sites() for d in template[s].get_shape()[:4])
         if D_ck != D:
             raise SystemExit(f"checkpoint {ck} has D = {D_ck}, not --D {D}")
-        chain = var.Chain(template, model, ops, chi, checkpoint=ck, log=lambda s: print(s, flush=True)).load(ck)
+        chain = var.Chain(template, model, ops, chi, max_sweeps=a.max_sweeps, checkpoint=ck,
+                          log=lambda s: print(s, flush=True)).load(ck)
         print(f"resumed at step {len(chain.history)}", flush=True)
     else:
         psi = seed_state(a.seed, D, theta, a.noise, a.rng, a.sym)
-        chain = var.Chain(var.convert(psi, ops.config), model, ops, chi, checkpoint=ck, log=lambda s: print(s, flush=True))
+        chain = var.Chain(var.convert(psi, ops.config), model, ops, chi, max_sweeps=a.max_sweeps, checkpoint=ck,
+                          log=lambda s: print(s, flush=True))
     status = chain.run(max_steps=a.max_steps)
     psi = chain.numpy_peps()
     with open(a.out + ".pkl", "wb") as f:
         pickle.dump(peps_to_dict(psi), f)
     val = var.validate(psi, model, [D * D, 2 * D * D, 3 * D * D])
     rec = {"theta_over_pi": a.theta_over_pi, "D": D, "chi_opt": chi, "seed": a.seed, "sym": a.sym, "noise": a.noise,
-           "rng": a.rng, "status": status, "energy_opt": chain.history[-1]["energy"] if chain.history else None,
+           "rng": a.rng, "threads": a.threads, "max_sweeps": a.max_sweeps, "status": status, "energy_opt": chain.history[-1]["energy"] if chain.history else None,
            "validation": {**val, "order": {str(k): v for k, v in val["order"].items()}},
            "history": chain.history}
     with open(a.out + ".json", "w") as f:
