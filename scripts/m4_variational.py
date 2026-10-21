@@ -18,7 +18,8 @@ OUT.pkl (final numpy state) and OUT.json
 ``--chi`` defaults to 3 D^2. At 2 D^2 the cut can fall inside a near-degenerate group of
 environment singular values; the gap-safe truncation keeps or drops the group whole, so the loss
 jumps by ~1e-7 (U1xU1, D = 5) where the grouping changes along a search direction. That is as large
-as the per-step gains near convergence, and the line search stalls (docs/ad_workflow.md §2).
+as the per-step gains near convergence, and the line search stalls. At 3 D^2, D = 5 converges;
+D = 4 still stalls with <~1e-6 gain per step left, and moves again at 4 D^2 (docs/ad_workflow.md §2).
 A checkpoint resumes only at its own chi; to change chi, seed a new chain with the state.
 
 ``--threads N`` (default 1) sets the BLAS/OpenMP and torch intra-op threads. It pays only for dense

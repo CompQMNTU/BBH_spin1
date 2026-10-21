@@ -51,6 +51,15 @@ Tested and ruled out at D = 4: resetting L-BFGS, renormalizing the tensors to un
 
 `scripts/m4_variational.py` now defaults to 3D².
 
+**[impl] Results at 3D² (2026-10-21), U1×U1, θ = π/4.** 3D² shrinks the jumps but does not remove them.
+- D = 5 (χ = 75) converged: 274 steps, final |g| = 7e-5. Validated E = 1.6490700 (χ = 75), 1.6490691 (χ = 100).
+- D = 4 (χ = 48) stalled after 15 steps at |g| = 4.18e-3: 8–14 evaluations per step, E flat to 1e-10. At the stalled state:
+  - Along −g, the AD slope matches the energy change for steps t ≤ 1e-5. The best point is t ≈ 1e-4 with dE = −5.5e-7, and E rises from t ≈ 3e-4 on. The 1e-4 point lies below the quadratic through the others: the loss jumps by ~3e-7 along the line.
+  - A tighter `corner_tol` (1e-11) changes the gradient by 5e-10 (relative). Random displacements of 1e-5 change it by 20% and E by 3e-6; at 1e-3, cos(g, g′) = 0.25.
+  - So the gradient is right but describes the loss only within ~1e-5; the per-step gain left (≲1e-6) is below the jumps. The χ-dependence of E is larger: 1.6508657 (χ = 48) vs 1.6508443 (χ = 64).
+  - Restarted at χ = 64 (4D²) from that state, the chain moves again with one evaluation per step: E (at χ = 64) 1.6508440 → 1.6508416 in 8 steps, gains shrinking from ~3e-7 to ~1e-7 per step. The jumps shrink with χ; the remaining gain (~1e-6) is small next to the χ-dependence, so for the D extrapolation report the largest-χ validation.
+- The dense D = 4 chain (GPU) stalled the same way at |g| = 4.2e-3, but 9e-5 higher (validated 1.6509549 at χ = 48).
+
 ## 3. Inner loop (closure evaluated by the optimizer)
 
 Parameters are the raw data `t._data` of the unique site tensors (3 for √3×√3), with `requires_grad=True`. This is the same pattern as the upstream test.
