@@ -28,6 +28,8 @@ from . import lattice, measure, operators
 from .yastn_compat import DegenerateSVDWarning, exact_svd_backward, gap_safe_truncation, peps_to_dict, zeroed_pairs
 
 # Raised by a loss evaluation that cannot be trusted; the chain perturbs and retries (§6).
+# Chain.run also retries torch.linalg.LinAlgError (LAPACK SVD not converged), added there
+# because torch is imported lazily.
 RECOVERABLE = (DegenerateSVDWarning, FloatingPointError)
 
 
@@ -287,7 +289,8 @@ class Chain:
     def run(self, max_steps=100, tol_E=1e-8, window=5, tol_grad=1e-6, max_failures=3):
         """Optimize until E changes by < tol_E over ``window`` steps, |g| < tol_grad, or max_steps.
 
-        A failed step (NoFixedPointError, degenerate SVD gradient, NaN) is retried after
+        A failed step (NoFixedPointError, degenerate SVD gradient, NaN, an SVD that LAPACK cannot
+        converge) is retried after
         :meth:`perturb`; after ``max_failures`` consecutive failures the error propagates. Before
         either convergence exit, a gradient that involved zeroed pairs is FD-checked at the final
         point; a failed check rejects the step (rolled back, then perturbed) and counts as a failure.
@@ -295,12 +298,14 @@ class Chain:
         Returns a status string: 'converged', 'grad', 'max_steps'.
         """
         from yastn.tn.fpeps.envs.fixed_pt import NoFixedPointError
+        # gesdd fails on some ill-conditioned CTM matrices (theta = 0, dense D = 4, in an FD check)
+        recoverable = (NoFixedPointError, self.torch.linalg.LinAlgError, *RECOVERABLE)
         failures = 0
         while len(self.history) < max_steps:
             snapshot = [p.detach().clone() for p in self.params]
             try:
                 entry = self.step()
-            except (NoFixedPointError, *RECOVERABLE) as e:
+            except recoverable as e:
                 failures += 1
                 if self.log:
                     self.log(f"step {len(self.history) + 1} failed ({type(e).__name__}: {e}); retry {failures}")
@@ -321,7 +326,7 @@ class Chain:
             if entry["zeroed_grad"] and "fd_check" not in entry:
                 try:
                     ok, checks, _ = self.check_gradient(seed=entry["step"])
-                except (NoFixedPointError, *RECOVERABLE) as e:
+                except recoverable as e:
                     ok, checks = False, repr(e)
                 if not ok:
                     failures += 1
