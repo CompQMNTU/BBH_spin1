@@ -178,6 +178,36 @@ def test_run_fd_checks_a_zeroed_gradient_before_stopping(monkeypatch):
     assert len(ch.history) == 1 and "fd_check" in ch.history[-1]
 
 
+def test_run_retries_a_failed_svd(monkeypatch):
+    """LAPACK's SVD can fail to converge on an ill-conditioned matrix (theta = 0, dense D = 4: inside
+    the FD check's loss evaluations); like a non-converged CTM, that fails the step and is retried."""
+    def svd_failure():
+        return torch.linalg.LinAlgError("linalg.svd: The algorithm failed to converge")
+
+    ch, calls, perturbs = _fake_run_chain(monkeypatch, [True])
+    real_step, raised = ch.step, []
+
+    def flaky_step():
+        if not raised:
+            raised.append(1)
+            raise svd_failure()
+        return real_step()
+    monkeypatch.setattr(ch, "step", flaky_step)
+    assert ch.run(max_steps=1) == "grad"
+    assert len(raised) == 1 and len(perturbs) == 1 and len(ch.history) == 1
+
+    def failing_check(seed):  # in the final gate: counts as a failed check, the step is rejected
+        calls.append(seed)
+        if len(calls) == 2:
+            raise svd_failure()
+        return True, [(0.0, 1.0)], 0.0
+    ch, calls, perturbs = _fake_run_chain(monkeypatch, [])
+    calls.append(None)
+    monkeypatch.setattr(ch, "check_gradient", failing_check)
+    assert ch.run(max_steps=1) == "grad"
+    assert len(calls) == 3 and len(perturbs) == 1 and len(ch.history) == 1
+
+
 def test_run_raises_after_repeated_final_check_failures(monkeypatch):
     ch, calls, _ = _fake_run_chain(monkeypatch, [False] * 10)
     with pytest.raises(DegenerateSVDWarning, match="final gradient"):
