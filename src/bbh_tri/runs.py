@@ -133,7 +133,18 @@ def run_seed(cfg):
     E, _ = measure.energy(psi, measure.ctm_env(psi, evolve.default_chi(o["D"])), ops, Model(theta))
     io.save_state(o["out"], psi)
     dims = sorted({d for s in psi.sites() for d in psi[s].get_shape()[:4]})
-    return {"out": o["out"], "energy_chi_D2": E, "bond_dims": dims}
+    rec = {"task": "seed", "out": o["out"], "energy_chi_D2": E, "bond_dims": dims, "cell": _cell(psi),
+           "seed_provenance": _seed_provenance(o["seed"]), "options": o, "metadata": io.metadata()}
+    io.write_json(f"{o['out']}.json", rec)  # sidecar: how the state was made
+    return rec
+
+
+def _seed_provenance(spec):
+    """The sidecar record (OUT.json of a seed task) of the saved state a seed spec names, if any:
+    a variational record keeps the chain of seeds back to its origin."""
+    path = spec[3:] if isinstance(spec, str) and spec.startswith("bp:") else spec
+    side = f"{path}.json" if isinstance(path, str) else None
+    return io.read_json(side) if side and os.path.exists(side) else None
 
 
 # ---- variational --------------------------------------------------------------------------
@@ -234,7 +245,7 @@ def run_variational(cfg, log=print):
         if os.path.exists(ck):
             history += [{**h, "chi": chis[j]} for h in torch.load(ck, weights_only=False, map_location="cpu")["history"]]
     rec = {"task": "variational", "theta_over_pi": o["theta_over_pi"], "D": D, "sym": o["sym"], "cell": _cell(psi),
-           "seed": o["seed"], "chi_stages": chis[:last + 1], "chi_opt": chis[last], "status": status, "stages": stages,
+           "seed": o["seed"], "seed_provenance": _seed_provenance(o["seed"]), "chi_stages": chis[:last + 1], "chi_opt": chis[last], "status": status, "stages": stages,
            "energy_opt": next((h["energy"] for h in reversed(history) if h["chi"] == chis[last]), None),
            "options": o, "metadata": meta, "init": run_info["init"], "sessions": run_info["sessions"],
            "wall_time": time.time() - t0, "history": history}
@@ -260,21 +271,20 @@ def run_variational(cfg, log=print):
 
 
 def _run_provenance(out, o):
-    """Contents of OUT.run.json (the caller appends this session and writes it): the options that made the initial state and one metadata record per session
-    (each invocation that resumes or rewrites the chain), so that a chain resumed across code
+    """Contents of OUT.run.json (the caller appends this session and writes it): the options that
+    made the initial state and one metadata record per session (each invocation that resumes or rewrites the chain), so that a chain resumed across code
     revisions keeps all of them. A rerun with different initialization options raises: it would
     continue the old chain under the new labels. A chain from before this file existed gets the
-    current options, marked unverified."""
+    options of the first run that finds it, marked unverified, and later runs are held to them."""
     path = f"{out}.run.json"
     init = json.loads(json.dumps({k: o[k] for k in INIT_KEYS}))  # as stored (tuples become lists)
     if os.path.exists(path) and os.path.exists(f"{out}.pt"):  # no checkpoint: an earlier start failed
         info = io.read_json(path)
-        if not info["init"].get("unverified"):
-            old = {k: info["init"].get(k) for k in INIT_KEYS}
-            changed = sorted(k for k in INIT_KEYS if old[k] != init[k])
-            if changed:
-                raise ValueError(f"{out}: the chain was started with {({k: old[k] for k in changed})}, "
-                                 f"not {({k: init[k] for k in changed})}; use another out")
+        old = {k: info["init"].get(k) for k in INIT_KEYS}  # unverified ones too: the first claim binds
+        changed = sorted(k for k in INIT_KEYS if old[k] != init[k])
+        if changed:
+            raise ValueError(f"{out}: the chain was started with {({k: old[k] for k in changed})}, "
+                             f"not {({k: init[k] for k in changed})}; use another out")
     else:
         legacy = os.path.exists(f"{out}.pt")
         info = {"init": {**init, **({"unverified": True} if legacy else {})}, "sessions": []}

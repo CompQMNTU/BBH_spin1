@@ -262,6 +262,10 @@ def test_variational_task_escalates_chi_and_resumes(tmp_path):
     assert len(again["sessions"]) == 2 and again["init"]["seed"] == "bp"  # every session is kept
     with pytest.raises(ValueError, match="was started with"):  # another seed would relabel the old chain
         runs.run_variational({**cfg, "rng": 1}, log=lambda s: None)
+    os.remove(out + ".run.json")  # a chain from before OUT.run.json: the first run's options bind
+    assert runs.run_variational(cfg, log=lambda s: None)["init"]["unverified"]
+    with pytest.raises(ValueError, match="was started with"):
+        runs.run_variational({**cfg, "rng": 1}, log=lambda s: None)
     with pytest.raises(ValueError, match="was made for"):  # finished stages are identity-checked too
         runs.run_variational({**cfg, "theta_over_pi": 0.3}, log=lambda s: None)
 
@@ -366,6 +370,9 @@ def test_seed_task_truncates_a_saved_state(tmp_path):
     r = runs.run_seed({"seed": f"bp:{r['out']}", "D": 1, "theta_over_pi": 0.25, "sym": "U1xU1", "schedule": [0.1],
                        "out": str(tmp_path / "d1b.pkl")})
     assert r["bond_dims"] == [1]
+    side = io.read_json(r["out"] + ".json")  # each seed writes how it was made, and links its source's record
+    assert side["options"]["D"] == 1 and side["metadata"]["yastn"]
+    assert side["seed_provenance"]["options"]["D"] == 2 and side["seed_provenance"]["seed_provenance"] is None
 
 
 @torch_needed

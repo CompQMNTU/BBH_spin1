@@ -116,7 +116,7 @@ def main(argv=None):
 
 def _summary(rec):
     """The parts of a record worth printing (histories stay in the files)."""
-    return {k: v for k, v in rec.items() if k not in ("history", "options", "metadata", "class_energies")}
+    return {k: v for k, v in rec.items() if k not in ("history", "options", "metadata", "class_energies", "sessions", "seed_provenance")}
 
 
 if __name__ == "__main__":
