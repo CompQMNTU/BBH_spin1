@@ -18,6 +18,7 @@ symmetric ones must already be at D), ``bp`` (random product state evolved at D,
 at D: grows or truncates its bonds), ``random`` or NAME (product state, padded; dense only).
 """
 
+import json
 import os
 import time
 
@@ -33,7 +34,10 @@ VARIATIONAL = {**COMMON, "theta_over_pi": None, "D": None, "seed": None, "out": 
                "cell": "sqrt3", "cell_dims": None, "chi": None, "max_steps": 200, "noise": 1e-3, "rng": 0, "max_sweeps": 100,
                "device": "cpu", "max_hours": None, "tol_E": 1e-8, "tol_grad": 1e-6,
                "stall_window": 5, "stall_min_evals": 25, "stall_gain": 2e-8,
-               "validate": True, "validate_chi": None, "schedule": None}
+               "validate": True, "validate_chi": None, "validate_reserve_hours": 0, "schedule": None}
+
+# options that make the initial state; a resumed chain must have been started with the same ones
+INIT_KEYS = ("seed", "noise", "rng", "schedule", "cell", "cell_dims")
 
 VALIDATE = {**COMMON, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
             "corner_tol": 1e-10, "max_sweeps": 500}
@@ -158,13 +162,15 @@ def run_variational(cfg, log=print):
     ops = var.torch_ops(o["sym"], device=o["device"])
     np_config = operators.spin1(o["sym"]).config
     deadline = time.time() + 3600 * float(o["max_hours"]) if o["max_hours"] else None
+    # the optimization stops early enough to leave validate_reserve_hours for the validation
+    opt_deadline = deadline - 3600 * float(o["validate_reserve_hours"] or 0) if deadline is not None else None
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)  # Chain.save does not create it
+    run_info = _run_provenance(out, o)  # checked here, written once the checkpoints pass too
     stages_path = f"{out}.stages.json"
     stages = io.read_json(stages_path) if os.path.exists(stages_path) else []
     if [s["chi"] for s in stages] != chis[:len(stages)]:
         raise ValueError(f"{stages_path} has stages at chi {[s['chi'] for s in stages]}, not a prefix of {chis}")
     run_kw = {k: o[k] for k in ("tol_E", "tol_grad", "stall_window", "stall_min_evals", "stall_gain")}
-    meta = io.metadata()
     status = stages[-1]["status"] if stages else None
     t0 = time.time()
 
@@ -188,6 +194,9 @@ def run_variational(cfg, log=print):
     for j in range(len(chis)):
         if os.path.exists(_stage_checkpoint(out, chis, j)):
             load_chain(j)
+    meta = io.metadata()
+    run_info["sessions"].append(meta)
+    io.write_json(f"{out}.run.json", run_info)
     if status == "max_steps":  # a step limit is not an outcome: resume that stage (to a larger max_steps)
         stages.pop()
         status = None
@@ -206,7 +215,7 @@ def run_variational(cfg, log=print):
             chain.save(ck)  # so that a deadline before the first step still leaves a resumable stage
             if k:
                 log(f"stage {k}: chi {chis[k - 1]} stalled; continuing at chi {chis[k]}")
-        status = chain.run(max_steps=o["max_steps"], deadline=deadline, **run_kw)
+        status = chain.run(max_steps=o["max_steps"], deadline=opt_deadline, **run_kw)
         if status == "time":
             break
         stages.append({"chi": chis[k], "status": status, "steps": len(chain.history),
@@ -227,16 +236,49 @@ def run_variational(cfg, log=print):
     rec = {"task": "variational", "theta_over_pi": o["theta_over_pi"], "D": D, "sym": o["sym"], "cell": _cell(psi),
            "seed": o["seed"], "chi_stages": chis[:last + 1], "chi_opt": chis[last], "status": status, "stages": stages,
            "energy_opt": next((h["energy"] for h in reversed(history) if h["chi"] == chis[last]), None),
-           "options": o, "metadata": meta,
+           "options": o, "metadata": meta, "init": run_info["init"], "sessions": run_info["sessions"],
            "wall_time": time.time() - t0, "history": history}
-    if o["validate"] and status != "time" and deadline is not None and time.time() >= deadline:
-        rec["validation_skipped"] = "max_hours reached; run the same config again to validate"
-    elif o["validate"] and status != "time":
+    if o["validate"] and status != "time":
         vchis = sorted(set(o["validate_chi"] or [2 * D * D, 3 * D * D, 4 * D * D]))
-        val = var.validate(psi, model, vchis)
-        rec["validation"] = {**val, "order": {str(s): v for s, v in val["order"].items()}}
+        done = {}
+        for c in vchis:  # one chi at a time, so that the deadline is checked between them
+            if deadline is not None and time.time() >= deadline:
+                break
+            done[c] = var.validate(psi, model, [c])
+        if len(done) == len(vchis):
+            val = {key: {c: done[c][key][c] for c in vchis} for key in ("energies", "class_energies", "ctm_converged")}
+            val.update(c3_spread=done[vchis[-1]]["c3_spread"], order=done[vchis[-1]]["order"])
+            rec["validation"] = {**val, "order": {str(s): v for s, v in val["order"].items()}}
+        else:  # an incomplete validation is kept apart: extrapolate reads only "validation"
+            rec["validation_skipped"] = ("max_hours reached; run the same config again to validate "
+                                         "(set validate_reserve_hours to leave time for it)")
+            if done:
+                rec["validation_partial"] = {"energies": {c: v["energies"][c] for c, v in done.items()},
+                                             "ctm_converged": {c: v["ctm_converged"][c] for c, v in done.items()}}
     io.write_json(f"{out}.json", rec)
     return rec
+
+
+def _run_provenance(out, o):
+    """Contents of OUT.run.json (the caller appends this session and writes it): the options that made the initial state and one metadata record per session
+    (each invocation that resumes or rewrites the chain), so that a chain resumed across code
+    revisions keeps all of them. A rerun with different initialization options raises: it would
+    continue the old chain under the new labels. A chain from before this file existed gets the
+    current options, marked unverified."""
+    path = f"{out}.run.json"
+    init = json.loads(json.dumps({k: o[k] for k in INIT_KEYS}))  # as stored (tuples become lists)
+    if os.path.exists(path) and os.path.exists(f"{out}.pt"):  # no checkpoint: an earlier start failed
+        info = io.read_json(path)
+        if not info["init"].get("unverified"):
+            old = {k: info["init"].get(k) for k in INIT_KEYS}
+            changed = sorted(k for k in INIT_KEYS if old[k] != init[k])
+            if changed:
+                raise ValueError(f"{out}: the chain was started with {({k: old[k] for k in changed})}, "
+                                 f"not {({k: init[k] for k in changed})}; use another out")
+    else:
+        legacy = os.path.exists(f"{out}.pt")
+        info = {"init": {**init, **({"unverified": True} if legacy else {})}, "sessions": []}
+    return info
 
 
 def _cell(psi):

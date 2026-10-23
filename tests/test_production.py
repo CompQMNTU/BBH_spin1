@@ -259,6 +259,9 @@ def test_variational_task_escalates_chi_and_resumes(tmp_path):
     assert set(rec["validation"]["energies"]) == {8}
     again = runs.run_variational(cfg, log=lambda s: None)  # finished: rewrites the outputs only
     assert again["history"] == rec["history"]
+    assert len(again["sessions"]) == 2 and again["init"]["seed"] == "bp"  # every session is kept
+    with pytest.raises(ValueError, match="was started with"):  # another seed would relabel the old chain
+        runs.run_variational({**cfg, "rng": 1}, log=lambda s: None)
     with pytest.raises(ValueError, match="was made for"):  # finished stages are identity-checked too
         runs.run_variational({**cfg, "theta_over_pi": 0.3}, log=lambda s: None)
 
@@ -317,6 +320,32 @@ def test_variational_task_skips_validation_after_the_deadline(tmp_path, monkeypa
                                 "max_hours": 1.0}, log=lambda s: None)
     assert rec["status"] == "max_steps" and "validation" not in rec and "validation_skipped" in rec
     assert rec["cell"] == {"type": "TriangularLattice", "dims": [3, 3], "unique_sites": 3, "boundary": "infinite"}
+
+
+@torch_needed
+def test_validation_stops_at_the_deadline_and_reserve_shortens_the_optimization(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from bbh_tri import variational as var
+    import time as real_time
+    t0 = real_time.time()  # Chain.run checks the deadline against the real clock
+    now = [t0]
+    monkeypatch.setattr(runs, "time", type("Clock", (), {"time": staticmethod(lambda: now[0])}))
+    real_validate, seen = var.validate, []
+
+    def validate(psi, model, chis, **kw):  # each chi takes two hours
+        seen.append(chis)
+        now[0] += 7200
+        return real_validate(psi, model, chis, **kw)
+    monkeypatch.setattr(var, "validate", validate)
+    deadlines = []
+    real_run = var.Chain.run
+    monkeypatch.setattr(var.Chain, "run", lambda self, **kw: deadlines.append(kw["deadline"]) or real_run(self, **kw))
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": str(tmp_path / "r"), "chi": 8, "max_steps": 1,
+           "max_hours": 1.5, "validate_chi": [6, 8], "validate_reserve_hours": 0.5}
+    rec = runs.run_variational(cfg, log=lambda s: None)
+    assert deadlines == [t0 + 3600]  # 1.5 h minus the 0.5 h reserve
+    assert seen == [[6]] and "validation" not in rec  # the 8 would start after the deadline
+    assert set(rec["validation_partial"]["energies"]) == {6} and "validation_skipped" in rec
 
 
 def test_validate_task_records_D(tmp_path):
