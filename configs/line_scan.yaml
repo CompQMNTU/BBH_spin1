@@ -1,0 +1,8 @@
+# Energy along -g at a stalled chain (docs/ad_workflow.md §2): if no step gains more than the loss
+# jumps of the chi cut, the state is converged at this chi whatever |g| says.
+task: line_scan
+theta_over_pi: 0.25
+sym: U1xU1
+state: results/m4/pi4_D4_U1xU1.pt
+chi: 48
+out: "{state}.linescan.json"

@@ -1,0 +1,8 @@
+# Re-measure a saved state (.pkl, or a chain checkpoint .pt) at several chi (numpy backend).
+#   uv run bbh-run configs/validate.yaml --set state=results/m4/pi4_D5_U1xU1.pt --set "chi=[75, 100, 125]"
+task: validate
+theta_over_pi: 0.25
+sym: U1xU1
+state: results/m4/pi4_D5_U1xU1.pkl
+chi: [50, 75, 100]
+out: "{state}.validate.json"

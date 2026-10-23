@@ -2,7 +2,7 @@
 
     uv run --with matplotlib python scripts/m3_plot_scan.py results/m3_scan_D4.jsonl docs/figures/m3_scan_D4.png
 
-Per theta the lowest-energy run wins (``m3_theta_scan.best_per_theta``: ties within 1e-8 go to
+Per theta the lowest-energy run wins (``bbh_tri.scan.best_per_theta``: ties within 1e-8 go to
 the seeds before the random start).
 """
 
@@ -11,7 +11,7 @@ import sys
 
 import numpy as np
 
-from m3_theta_scan import best_per_theta, run_params
+from bbh_tri.scan import best_per_theta, run_params
 
 
 def main(path, png):

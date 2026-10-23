@@ -333,3 +333,12 @@ def test_chain_on_cuda_matches_cpu_and_resumes_a_cpu_checkpoint(tmp_path):
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": ""}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, cwd=ROOT)
     assert out.returncode == 0, out.stderr[-2000:]
+
+
+@pytest.mark.slow
+def test_line_scan_fd_checks_a_zeroed_gradient(psi_d3):
+    """The D = 3 state keeps a degenerate CTM pair; the line scan zeroes it in the gradient and must
+    FD-check that gradient before scanning along it (the zero mode has no error bound)."""
+    out = var.line_scan(chain(psi_d3, 3), steps=(1e-4,))
+    assert "fd_check" in out and len(out["fd_check"]) == 3
+    assert out["scan"][0]["dE"] < 0

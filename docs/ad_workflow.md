@@ -1,6 +1,6 @@
 # Ground-state search by implicit-AD CTM (design)
 
-Status (2026-10-18): implemented in `src/bbh_tri/variational.py` (`Chain`, `validate`, `pad`, `convert`) and `scripts/m4_variational.py`; tests in `tests/test_variational.py`. Deviations from the design below are marked **[impl]**. Not yet implemented: warm-started environments, multiplet-aware truncation, Adam fallback, the config/HDF5 layer, symmetric tensors.
+Status (2026-10-18): implemented in `src/bbh_tri/variational.py` (`Chain`, `validate`, `pad`, `convert`) and `scripts/m4_variational.py`; tests in `tests/test_variational.py`. Deviations from the design below are marked **[impl]**. Not yet implemented: warm-started environments, Adam fallback, HDF5 output. (Since implemented: multiplet-aware truncation, symmetric tensors, the config layer: `bbh-run`, docs/milestones.md "Production layer".)
 API facts are from yastn `1.6.2.dev320+g7ed8ad0e6`: `envs/fixed_pt.py`, `envs/rdm.py`, and the upstream test `tests/peps/test_fp_tV_complex.py`, which is the reference usage pattern.
 See `docs/yastn_findings.md` for the related M0 results.
 

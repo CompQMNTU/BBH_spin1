@@ -286,8 +286,10 @@ class Chain:
         self.optimizer = self.torch.optim.LBFGS(self.params, **self.opt_kwargs)
         self._last = None
 
-    def run(self, max_steps=100, tol_E=1e-8, window=5, tol_grad=1e-6, max_failures=3):
-        """Optimize until E changes by < tol_E over ``window`` steps, |g| < tol_grad, or max_steps.
+    def run(self, max_steps=100, tol_E=1e-8, window=5, tol_grad=1e-6, max_failures=3,
+            stall_window=5, stall_min_evals=25, stall_gain=2e-8, deadline=None):
+        """Optimize until E changes by < tol_E over ``window`` steps, |g| < tol_grad, the line
+        search stalls, the wall clock passes ``deadline`` (a ``time.time()`` value), or max_steps.
 
         A failed step (NoFixedPointError, degenerate SVD gradient, NaN, an SVD that LAPACK cannot
         converge) is retried after
@@ -295,13 +297,23 @@ class Chain:
         either convergence exit, a gradient that involved zeroed pairs is FD-checked at the final
         point; a failed check rejects the step (rolled back, then perturbed) and counts as a failure.
         The failure count resets only after a step that passes all checks.
-        Returns a status string: 'converged', 'grad', 'max_steps'.
+
+        Stall: the last ``stall_window`` steps took >= ``stall_min_evals`` loss evaluations and
+        lowered E by < ``stall_gain`` per evaluation. Near convergence the gain per step falls to
+        the size of the loss jumps of the multiplet-preserving chi cut, and the line search then
+        spends ~20 evaluations per step for ~1e-8 (U1xU1, D = 4-6; docs/ad_workflow.md §2). A
+        slow but healthy tail (one evaluation per step) is not a stall. A stalled state is not
+        converged: continue at larger chi or check with a line scan (:func:`line_scan`).
+        ``stall_window=0`` disables the test.
+        Returns a status string: 'converged', 'grad', 'stalled', 'time', 'max_steps'.
         """
         from yastn.tn.fpeps.envs.fixed_pt import NoFixedPointError
         # gesdd fails on some ill-conditioned CTM matrices (theta = 0, dense D = 4, in an FD check)
         recoverable = (NoFixedPointError, self.torch.linalg.LinAlgError, *RECOVERABLE)
         failures = 0
         while len(self.history) < max_steps:
+            if deadline is not None and time.time() >= deadline:
+                return "time"  # every completed step is already checkpointed
             snapshot = [p.detach().clone() for p in self.params]
             try:
                 entry = self.step()
@@ -317,11 +329,21 @@ class Chain:
                 self.perturb(seed=1000 * failures + len(self.history))
                 continue
             Es = [h["energy"] for h in self.history[-window - 1:]]
-            status = ("grad" if entry["grad_norm"] < tol_grad
+            # a stall comes before energy convergence: a flat but expensive line search also has
+            # flat energies, and calling that 'converged' would skip the next chi stage
+            stalled = False
+            if stall_window and len(self.history) > stall_window:
+                evals = sum(h["evals"] for h in self.history[-stall_window:])
+                gain = self.history[-stall_window - 1]["energy"] - entry["energy"]
+                stalled = evals >= stall_min_evals and gain < stall_gain * evals
+            status = ("grad" if entry["grad_norm"] < tol_grad else "stalled" if stalled
                       else "converged" if len(Es) > window and max(Es) - min(Es) < tol_E else None)
             if status is None:
                 failures = 0
                 continue
+            if status == "stalled" and self.log:  # like the other exits, it passes the final FD gate below
+                self.log(f"step {entry['step']}: stalled ({evals} evaluations in {stall_window} steps "
+                         f"lowered E by {gain:.1e})")
             # never stop on an unchecked zero-mode gradient (the step's cadence may have skipped it)
             if entry["zeroed_grad"] and "fd_check" not in entry:
                 try:
@@ -382,6 +404,61 @@ class Chain:
         self.n_evals = d["n_evals"]
         self._last_fd_step = d["last_fd_step"]
         return self
+
+
+def line_scan(chain, steps=(1e-4, 3e-4, 1e-3, 3e-3, 1e-2)):
+    """Energy along the steepest-descent direction at the chain's current parameters.
+
+    Diagnoses a stall (docs/ad_workflow.md §2): if no step lowers E by more than the loss jumps,
+    the state is as converged as this chi allows, whatever |g| says. Returns {"energy": E0,
+    "grad_norm": |g|, "scan": [{"t", "dE", "linear", "sweeps"}]} with ``linear`` = -|g| t, the
+    first-order prediction. Parameters are restored; the optimizer state is left alone. As in
+    :meth:`Chain.step`, ``DegenerateSVDWarning`` is raised (an unreliable gradient is no direction
+    to scan), and a gradient that involved zeroed degenerate pairs is FD-checked first (along it
+    and two random directions; result in ``fd_check``; a failure raises DegenerateSVDWarning).
+    A zero gradient (a stationary point) returns an empty scan.
+    """
+    torch = chain.torch
+    x0 = [p.detach().clone() for p in chain.params]
+    with exact_svd_backward(chain.kept_degenerate), warnings.catch_warnings():
+        warnings.simplefilter("error", DegenerateSVDWarning)
+        for p in chain.params:
+            p.grad = None
+        z0 = zeroed_pairs()
+        E0, _ = chain.loss()
+        E0.backward()
+        g = [p.grad.detach().clone() for p in chain.params]
+        gn = float(torch.sqrt(sum((x.abs() ** 2).sum() for x in g)))
+        out = {"energy": E0.item(), "grad_norm": gn, "scan": []}
+        if not np.isfinite(gn):
+            raise FloatingPointError(f"line_scan: non-finite gradient norm {gn}")
+        if zeroed_pairs() > z0:  # the zero mode has no a-priori error bound
+            def loss():
+                with torch.no_grad():
+                    return chain.loss()[0].item()
+            ok, checks, tol = fd_check(loss, chain.params, g, rtol=chain.fd_rtol)
+            out["fd_check"] = checks
+            if not ok:
+                raise DegenerateSVDWarning(f"line_scan: gradient with zeroed degenerate pairs fails the FD check "
+                                           f"(tolerance {tol:.2e}): (AD, FD) = {checks}")
+        if gn == 0:
+            for p in chain.params:
+                p.grad = None
+            return out
+        try:
+            with torch.no_grad():
+                for t in steps:
+                    for p, q, x in zip(chain.params, x0, g):
+                        p.copy_(q - t * x / gn)
+                    n = len(chain.sweeps)
+                    E = chain.loss()[0].item()
+                    out["scan"].append({"t": t, "dE": E - out["energy"], "linear": -gn * t, "sweeps": chain.sweeps[n:]})
+        finally:
+            with torch.no_grad():
+                for p, q in zip(chain.params, x0):
+                    p.copy_(q)
+                    p.grad = None
+    return out
 
 
 def _ctm_meta(ctm):
