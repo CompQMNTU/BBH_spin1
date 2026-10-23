@@ -260,6 +260,10 @@ def test_variational_task_escalates_chi_and_resumes(tmp_path):
     again = runs.run_variational(cfg, log=lambda s: None)  # finished: rewrites the outputs only
     assert again["history"] == rec["history"]
     assert len(again["sessions"]) == 2 and again["init"]["seed"] == "bp"  # every session is kept
+    assert again["sessions"][0]["options"]["stall_gain"] == 1.0 and {s["session"] for s in again["stages"]} == {0}
+    seed = runs.run_seed({"seed": f"bp:{out}.pkl", "D": 2, "theta_over_pi": 0.25, "schedule": [0.1],
+                          "out": str(tmp_path / "s.pkl")})  # a variational output's record is found
+    assert seed["seed_provenance"]["task"] == "variational" and "history" not in seed["seed_provenance"]
     with pytest.raises(ValueError, match="was started with"):  # another seed would relabel the old chain
         runs.run_variational({**cfg, "rng": 1}, log=lambda s: None)
     os.remove(out + ".run.json")  # a chain from before OUT.run.json: the first run's options bind
@@ -350,6 +354,13 @@ def test_validation_stops_at_the_deadline_and_reserve_shortens_the_optimization(
     assert deadlines == [t0 + 3600]  # 1.5 h minus the 0.5 h reserve
     assert seen == [[6]] and "validation" not in rec  # the 8 would start after the deadline
     assert set(rec["validation_partial"]["energies"]) == {6} and "validation_skipped" in rec
+    # cut at the optimization cutoff: the reserve validates the current state, apart from "validation"
+    seen.clear()
+    now[0] = t0 = real_time.time()
+    rec = runs.run_variational({**cfg, "out": str(tmp_path / "q"), "max_hours": 1.0, "validate_reserve_hours": 1.0,
+                                "validate_chi": [6]}, log=lambda s: None)
+    assert rec["status"] == "time" and seen == [[6]]
+    assert "validation" not in rec and set(rec["validation_interim"]["energies"]) == {6}
 
 
 def test_validate_task_records_D(tmp_path):

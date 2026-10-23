@@ -140,11 +140,17 @@ def run_seed(cfg):
 
 
 def _seed_provenance(spec):
-    """The sidecar record (OUT.json of a seed task) of the saved state a seed spec names, if any:
-    a variational record keeps the chain of seeds back to its origin."""
+    """The record of the saved state a seed spec names, if any, so that a chain of seeds can be
+    followed back to its origin: PATH.json (seed task sidecar) or, for the outputs of a variational
+    run OUT (OUT.pkl, OUT.pt, OUT.chiN.pt), OUT.json without its history."""
+    import re
     path = spec[3:] if isinstance(spec, str) and spec.startswith("bp:") else spec
-    side = f"{path}.json" if isinstance(path, str) else None
-    return io.read_json(side) if side and os.path.exists(side) else None
+    if not isinstance(path, str):
+        return None
+    for side in (f"{path}.json", re.sub(r"(\.chi\d+)?\.(pkl|pt)$", "", path) + ".json"):
+        if side != path and os.path.exists(side):
+            return {k: v for k, v in io.read_json(side).items() if k != "history"}
+    return None
 
 
 # ---- variational --------------------------------------------------------------------------
@@ -206,7 +212,7 @@ def run_variational(cfg, log=print):
         if os.path.exists(_stage_checkpoint(out, chis, j)):
             load_chain(j)
     meta = io.metadata()
-    run_info["sessions"].append(meta)
+    run_info["sessions"].append({**meta, "options": o})  # the settings behind this session's stops
     io.write_json(f"{out}.run.json", run_info)
     if status == "max_steps":  # a step limit is not an outcome: resume that stage (to a larger max_steps)
         stages.pop()
@@ -230,6 +236,7 @@ def run_variational(cfg, log=print):
         if status == "time":
             break
         stages.append({"chi": chis[k], "status": status, "steps": len(chain.history),
+                       "session": len(run_info["sessions"]) - 1,  # index into OUT.run.json sessions
                        "energy_opt": chain.history[-1]["energy"] if chain.history else None})
         io.write_json(stages_path, stages)
         if status != "stalled":
@@ -249,7 +256,10 @@ def run_variational(cfg, log=print):
            "energy_opt": next((h["energy"] for h in reversed(history) if h["chi"] == chis[last]), None),
            "options": o, "metadata": meta, "init": run_info["init"], "sessions": run_info["sessions"],
            "wall_time": time.time() - t0, "history": history}
-    if o["validate"] and status != "time":
+    # a run cut at the optimization cutoff validates its current state in the reserved time, as
+    # "validation_interim" (extrapolate reads only "validation": the chain is not finished)
+    interim = status == "time"
+    if o["validate"] and (not interim or o["validate_reserve_hours"]):
         vchis = sorted(set(o["validate_chi"] or [2 * D * D, 3 * D * D, 4 * D * D]))
         done = {}
         for c in vchis:  # one chi at a time, so that the deadline is checked between them
@@ -259,7 +269,8 @@ def run_variational(cfg, log=print):
         if len(done) == len(vchis):
             val = {key: {c: done[c][key][c] for c in vchis} for key in ("energies", "class_energies", "ctm_converged")}
             val.update(c3_spread=done[vchis[-1]]["c3_spread"], order=done[vchis[-1]]["order"])
-            rec["validation"] = {**val, "order": {str(s): v for s, v in val["order"].items()}}
+            rec["validation_interim" if interim else "validation"] = {
+                **val, "order": {str(s): v for s, v in val["order"].items()}}
         else:  # an incomplete validation is kept apart: extrapolate reads only "validation"
             rec["validation_skipped"] = ("max_hours reached; run the same config again to validate "
                                          "(set validate_reserve_hours to leave time for it)")
@@ -272,8 +283,9 @@ def run_variational(cfg, log=print):
 
 def _run_provenance(out, o):
     """Contents of OUT.run.json (the caller appends this session and writes it): the options that
-    made the initial state and one metadata record per session (each invocation that resumes or rewrites the chain), so that a chain resumed across code
-    revisions keeps all of them. A rerun with different initialization options raises: it would
+    made the initial state and one record per session (each invocation that resumes or rewrites the
+    chain: metadata and resolved options; stages name the session that ended them), so that a chain
+    resumed across code revisions or settings keeps all of them. A rerun with different initialization options raises: it would
     continue the old chain under the new labels. A chain from before this file existed gets the
     options of the first run that finds it, marked unverified, and later runs are held to them."""
     path = f"{out}.run.json"
