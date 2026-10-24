@@ -74,7 +74,22 @@ Symmetry switch (SPEC §4.5): `operators.spin1(sym)` for sym in dense, U1, U1xU1
 
 D = 4 at θ = π/4: the first chains (U1×U1 and dense, χ = 32) reached 1.6592 / 1.6614 and then stopped: a plain χ cut through a multiplet made CTM cycle (U1×U1) or split a near-degenerate pair (dense). Fixed with a multiplet- and gap-aware projector mask (`yastn_compat.gap_safe_truncation`, docs/yastn_findings.md); the chains were restarted from their last good states. Restarted U1×U1 chain (χ = 32, 300 steps, no failed steps, stopped at the step limit): validated E = 1.651264 (χ = 16), 1.650929 (32), **1.650875** (48), CTM converged at each χ, C₃ spread 1.4e-3; 0.0232 below D = 3 (1.67403), still above the paper's D = 12 value 1.632; the M4 acceptance is the D → ∞ extrapolation against 1.630(1) (SPEC §6). The last ~220 steps gained only 5e-5 (|g| ~1e-3), so the chain has plateaued rather than converged. The restarted dense chain stopped at step 80 (E_opt = 1.65588, not validated): from step 61 on the zero-mode gradient repeatedly failed the FD check (AD vs FD up to 5× apart at step 81, four retries), and `Chain` raised. Both restarts predate the single global cut of PR #10 (they ran the two-pass mask); whether the current mask removes the dense failure is untested.
 
-Open (SPEC §6 M4): EnvCTM full update; the π/4 acceptance with U1×U1 (D ladder, D → ∞ extrapolation consistent with 1.630(1)); D ladder and θ = 0 extrapolation; FQ/AFM3 hysteresis at 1.86–1.89π; gradient gate near θ ≈ 1.87π; profiling at D ≥ 4 (unrolled memory).
+**π/4 D ladder, U1×U1 (2026-10-24).** Validated energies at χ = 3D² (`results/m4/pi4_U1xU1_ladder.json`, states `results/m4/pi4_D{3..6}_U1xU1.pkl`):
+
+| D | E (χ = 3D²) | chain |
+|---|---|---|
+| 3 | 1.6740320 | bp:SU3, χ_opt = 2D², converged |
+| 4 | 1.6508645 | continued at 4D² from the stalled 3D² chain |
+| 5 | 1.6438356 | bp:PATH from the D = 6 χ = 2D² chain, χ_opt = 4D²; 5e-3 below the bp:SU3 chain (1.6490700) |
+| 6 | 1.6408868 | bp:PATH from that D = 5 state, χ_opt = 3D², stalled at step 172; 1.1e-3 below the first D = 6 chain (1.6419890) |
+
+D = 6 at χ = 72 / 108 / 144: 1.6409678 / 1.6408868 / 1.6408902 (χ = 144 CTM not converged); C₃ spread 2e-3. D = 2 is left out: its CTM converges at no χ. Paper extrapolation (midpoint of lowest E and 1/D intercept): D 3–6 → 1.6226 ± 0.0183, D 4–6 → 1.6306 ± 0.0103, D 5–6 → 1.6335 ± 0.0074; every subset is consistent with 1.630(1), so the M4 π/4 acceptance holds, with an error bar 10× the paper's (D ≤ 6 here, D = 12 there). The estimate drifts towards 1.630 as small D are dropped: D = 3 lies outside the linear-in-1/D range.
+
+At the stalled D = 6 state a line scan along −g (χ = 108, |g| = 2.5e-3) raises E by 9.6e-6 / 9.3e-6 / 9.2e-6 at t = 1e-4 / 3e-4 / 1e-3, then quadratically: a ~9e-6 loss jump, not curvature. The validated χ = 108 energy is 8.9e-6 above the optimizer's E₀, i.e. the chain sits on a low branch of the gap-safe χ cut that any step leaves. The jump is ~100× the 2D², D = 5 value (docs/ad_workflow.md §2); no gain is left along −g at this χ.
+
+**θ = 0 D ladder, dense (in progress, dgxsa1h).** Validated: D = 2 −1.7929888, D = 3 −1.8199089, D = 4 −1.831611(1) (χ = 4D² chain on GPU, stalled at step 122; χ = 48 / 64 / 96 agree to 1.1e-6; m = 0.8034, |Q| = 0.301). Extrapolation D 2–4 → −1.8513 ± 0.0197, D 3–4 → −1.8492 ± 0.0176, vs −1.8368(5): consistent but coarse. D = 5 (CPU, χ = 75) is running: E_opt = −1.8339323 at step 188 of 600. These runs and files are on dgxsa1h (`~/bbh_runs/theta0/`).
+
+Open (SPEC §6 M4): EnvCTM full update; θ = 0 D = 5 and the θ = 0 extrapolation; FQ/AFM3 hysteresis at 1.86–1.89π; gradient gate near θ ≈ 1.87π; profiling at D ≥ 4 (unrolled memory).
 
 ## Production layer (2026-10-23)
 Modules: `io.py` (state pickles; a `Chain` checkpoint loads as a state; atomic JSON; `metadata()` = git hash and dirty flag, bbh-tri/yastn/torch/numpy/python versions, host, time, threads, recorded in every result), `extrapolate.py` (paper method; `subsets` over consecutive D), `scan.py` (the M3 θ scan, moved from the script), `runs.py` (tasks: variational, validate, seed, line_scan, extrapolate, scan; option dicts checked against defaults, unknown keys raise), `cli.py` (`bbh-run CONFIG.yaml`, `runs:` batches with `--index` for job arrays, `{name}` templating, `--set`, `--dry-run`). `configs/` holds examples, `scripts/slurm/` a SLURM array template (not run: no cluster here) and `local_run.sh` (systemd memory cap, detached). `scripts/m3_theta_scan.py` and `scripts/m4_variational.py` keep their flags as wrappers, so existing runs resume unchanged.

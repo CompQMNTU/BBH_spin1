@@ -4,8 +4,9 @@
 # energy at the largest chi, or chi: min / a number).
 task: extrapolate
 reference: [1.630, 0.001]
-# U1xU1 validated energies, 2026-10-23 (D = 6 is being re-optimized from the D = 5 state)
+# U1xU1 validated energies at chi = 3D^2, 2026-10-24 (results/m4/pi4_U1xU1_ladder.json)
 points:
-  - [4, 1.6508198]
-  - [5, 1.6438495]
-  - [6, 1.6420273]
+  - [3, 1.6740320]
+  - [4, 1.6508645]
+  - [5, 1.6438356]
+  - [6, 1.6408868]
