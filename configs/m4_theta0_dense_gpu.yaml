@@ -1,0 +1,15 @@
+# theta = 0 (Heisenberg) ladder, dense, on a GPU (dgxsa1h). Export CUDA_DEVICE_ORDER=PCI_BUS_ID.
+#   uv run --extra cuda bbh-run configs/m4_theta0_dense_gpu.yaml --index 2 --set device=cuda:1
+# Never run dense unrolled AD at D >= 6 (>228 GB); D = 5 peaks at ~194 GB host memory.
+task: variational
+theta_over_pi: 0.0
+sym: dense
+device: cuda:0
+max_steps: 600
+max_sweeps: 50
+out: results/m4/theta0_D{D}_dense
+runs:
+  - {D: 2, seed: bp}
+  - {D: 3, seed: bp}
+  - {D: 4, seed: bp}
+  - {D: 5, seed: bp}

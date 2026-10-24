@@ -13,6 +13,9 @@ dependencies = [
     "yastn",
 ]
 
+[project.scripts]
+bbh-run = "bbh_tri.cli:main"
+
 [project.optional-dependencies]
 ad = ["torch"]
 cuda = ["torch"]

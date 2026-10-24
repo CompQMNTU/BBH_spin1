@@ -1,0 +1,8 @@
+# Build a D seed by EnvBP evolution from a saved state at another D (grows or truncates bonds).
+#   uv run bbh-run configs/seed_from_neighbour.yaml --set D=4 --set seed=bp:results/m4/pi4_D5_U1xU1.pkl
+task: seed
+theta_over_pi: 0.25
+sym: U1xU1
+D: 6
+seed: bp:results/m4/pi4_D5_U1xU1.pkl
+out: states/pi4_D{D}_U1xU1_from_neighbour.pkl

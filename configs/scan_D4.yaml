@@ -1,0 +1,7 @@
+# 80-point theta scan, D = 4, EnvBP, five starts per theta (SPEC §6 M3).
+task: scan
+D: 4
+n_theta: 80
+env: BP
+workers: 16             # shared node: <= 16 in total
+out: results/m3_scan_D4.jsonl

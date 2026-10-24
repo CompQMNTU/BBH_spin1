@@ -1,0 +1,18 @@
+# M4 acceptance ladder at theta = pi/4 (SU(3) point), U1xU1, AD + L-BFGS (docs/ad_workflow.md).
+#   uv run --extra ad bbh-run configs/m4_pi4_U1xU1.yaml --index 0       # one D
+#   sbatch --array=0-3 scripts/slurm/bbh_run.sbatch configs/m4_pi4_U1xU1.yaml
+# Each D starts at chi = 3 D^2 and continues at 4 D^2 if that stage stalls (Chain.run).
+# Product seeds can trap the chain in a poor local minimum (D = 5 from bp:SU3 sat 5e-3 too high,
+# 2026-10-22); seeding from a neighbouring D's optimized state (bp:PATH) did better.
+task: variational
+theta_over_pi: 0.25
+sym: U1xU1
+chi: [3D2, 4D2]
+max_steps: 300
+max_sweeps: 50          # bounds unrolled-AD memory (~0.1 GB per sweep at D = 5)
+out: results/m4/pi4_D{D}_U1xU1
+runs:
+  - {D: 3, seed: bp:SU3}
+  - {D: 4, seed: bp:SU3}
+  - {D: 5, seed: bp:SU3}
+  - {D: 6, seed: bp:SU3}
