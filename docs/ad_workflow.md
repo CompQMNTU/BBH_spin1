@@ -60,6 +60,8 @@ Tested and ruled out at D = 4: resetting L-BFGS, renormalizing the tensors to un
   - Restarted at χ = 64 (4D²) from that state, the chain moves again with one evaluation per step: E (at χ = 64) 1.6508440 → 1.6508416 in 8 steps, gains shrinking from ~3e-7 to ~1e-7 per step. The jumps shrink with χ; the remaining gain (~1e-6) is small next to the χ-dependence, so for the D extrapolation report the largest-χ validation.
 - The dense D = 4 chain (GPU) stalled the same way at |g| = 4.2e-3, but 9e-5 higher (validated 1.6509549 at χ = 48).
 
+**[impl] D = 6 at 3D² (2026-10-24), U1×U1, θ = π/4.** The chain seeded from the best D = 5 state stalled at step 172 (|g| = 2.5e-3, gains ~1e-9 per step). Line scan along −g at χ = 108: dE = +9.6e-6, +9.3e-6, +9.2e-6, +1.8e-5, +1.6e-4 at t = 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, against −|g| t = −2.5e-7 … −2.5e-5. Every step lands ~9e-6 higher: the optimizer's state sits on a low branch of the cut, and the fresh validation at χ = 108 (1.6408868) lies 8.9e-6 above its E₀ (1.6408779). At D = 6 the jumps at 3D² are ~100× those at 2D², D = 5, so 3D² does not prevent stalls there; the remaining gain is far below the D-extrapolation error, and the validated energy is the number to use.
+
 ## 3. Inner loop (closure evaluated by the optimizer)
 
 Parameters are the raw data `t._data` of the unique site tensors (3 for √3×√3), with `requires_grad=True`. This is the same pattern as the upstream test.
@@ -170,6 +172,7 @@ Resume picks up the latest checkpoint and reuses the env as a warm start. One HD
 - Set `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1` per chain; parallelize over chains (SLURM array), not threads.
 - GPU is optional: `fp_ctmrg(..., fwd_devices=...)` exists but is untested here.
 - Profile one step (forward + backward) at D = 2, 3, 4 with χ = 2D² before sizing the array jobs. The fullrank fixed-point SVD is the expected bottleneck at large χ.
+- **[impl] Memory (unrolled AD stores every CTM sweep).** Dense D = 4: ~88 GB on the CPU at χ = 48; on an 80 GB A100 χ = 48 fits and χ = 64 does not (~76 GB per evaluation; trial points OOM). Dense D = 5, χ = 75: ~5 GB per sweep, ~200 GB at a typical ~36 sweeps, 299 GB peak seen; budget ≥ 320 GB at `max_sweeps` 50.
 
 ## 10. First experiment (proposed acceptance for this workflow)
 
