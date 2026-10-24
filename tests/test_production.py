@@ -366,7 +366,10 @@ def test_validation_stops_at_the_deadline_and_reserve_shortens_the_optimization(
 def test_validate_task_records_D(tmp_path):
     p = str(tmp_path / "d1.pkl")
     io.save_state(p, states.product_peps(lattice.geometry("sqrt3"), states.seed_vectors("FM"), operators.spin1("dense")))
-    r = runs.run_validate({"state": p, "theta_over_pi": 0.75, "chi": [1, 2], "out": str(tmp_path / "v.json")})
+    r = runs.run_validate({"state": p, "theta_over_pi": 0.75, "chi": [1, 2], "out": str(tmp_path / "v.json"),
+                           "max_sweeps": 300})
+    saved = io.read_json(str(tmp_path / "v.json"))["options"]
+    assert saved["max_sweeps"] == 300 and saved["corner_tol"] == runs.VALIDATE["corner_tol"]
     assert r["D"] == 1 and r["energies"][2] == pytest.approx(3 * (np.cos(0.75 * np.pi) + np.sin(0.75 * np.pi)))
     assert runs._result_point(str(tmp_path / "v.json"), "max") == (1, pytest.approx(r["energies"][2]), (0.75, "dense"))
 

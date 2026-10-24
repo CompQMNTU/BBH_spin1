@@ -322,7 +322,7 @@ def run_validate(cfg):
     val = var.validate(psi, Model(np.pi * o["theta_over_pi"]), [int(c) for c in chis],
                        corner_tol=o["corner_tol"], max_sweeps=o["max_sweeps"])
     rec = {"task": "validate", "state": o["state"], "theta_over_pi": o["theta_over_pi"], "sym": o["sym"], "D": D,
-           **val, "order": {str(s): v for s, v in val["order"].items()}, "metadata": io.metadata()}
+           **val, "order": {str(s): v for s, v in val["order"].items()}, "options": o, "metadata": io.metadata()}
     if o["out"]:
         io.write_json(o["out"], rec)
     return rec
