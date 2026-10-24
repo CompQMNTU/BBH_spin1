@@ -34,6 +34,7 @@ class EvolveResult:
     stages: list = field(default_factory=list)
     history: list = field(default_factory=list)  # (tau, step, E) at every check
     wall_time: float = 0.0
+    timed_out: bool = False  # stopped at ``deadline``; the last stage is unfinished
 
 
 def normalize_(psi):
@@ -49,11 +50,12 @@ def default_chi(D):
 
 
 def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=400, check_every=20,
-           tol=1e-7, chi=None, svd_tol=1e-12, ctm_tol=1e-9, ctm_sweeps=100, log=None):
+           tol=1e-7, chi=None, svd_tol=1e-12, ctm_tol=1e-9, ctm_sweeps=100, log=None, deadline=None):
     """Evolve ``psi`` in place towards the ground state of ``model``; return an :class:`EvolveResult`.
 
     ``schedule`` lists the Trotter steps tau; the energy check uses a fresh CTM environment of
-    bond dimension ``chi`` (default D^2).
+    bond dimension ``chi`` (default D^2). ``deadline`` (a ``time.time()`` value): stop after the
+    first step that ends past it, with ``timed_out`` set.
     """
     chi = default_chi(D) if chi is None else chi
     metric = ENVS[env](psi)
@@ -63,6 +65,7 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
     step_kwargs = {"initialization": "EAT"} if env == "NTU" else {}
     result = EvolveResult(energy=np.nan, class_energies={})
     t0 = time.time()
+    E, by_class = np.nan, {}
 
     def check():
         E, by_class = measure.energy(psi, measure.ctm_env(psi, chi, corner_tol=ctm_tol, max_sweeps=ctm_sweeps), ops, model)
@@ -76,6 +79,9 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
             infos = fpeps.evolution_step_(metric, step_gates, opts_svd=opts_svd, **step_kwargs)
             normalize_(psi)
             err = max([err] + [i.truncation_error for i in infos])
+            if deadline is not None and time.time() >= deadline:
+                result.timed_out = True
+                break
             if step % check_every == 0 or step == max_steps:
                 E, by_class = check()
                 result.history.append((tau, step, E))
@@ -86,6 +92,8 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
                     break
                 E_old = E
         result.stages.append(Stage(tau, step, converged, E, err))
+        if result.timed_out:
+            break
     result.energy, result.class_energies = E, by_class
     result.wall_time = time.time() - t0
     return result

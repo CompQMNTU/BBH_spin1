@@ -86,26 +86,43 @@ def chi_list(chi, D):
 
 # ---- seeds --------------------------------------------------------------------------------
 
-def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", schedule=None, cell_dims=None):
+def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", schedule=None, cell_dims=None,
+               deadline=None, partial=None, partial_id=None):
     """Numpy-backend PEPS at bond dimension D from a seed spec (module docstring). ``cell``,
     ``cell_dims``: ``lattice.geometry`` arguments for product-state seeds (a saved state brings its
-    own geometry)."""
+    own geometry).
+
+    ``deadline`` stops an evolving seed (``bp...``) early: the state so far goes to ``partial``
+    (a .pkl path; progress in PARTIAL.json) and None is returned. A later call with the same
+    ``partial`` and ``partial_id`` (any JSON value naming the inputs) continues from it at the
+    first unfinished tau; one with another ``partial_id`` starts afresh."""
     from . import evolve, lattice, operators, states, variational as var
     from .hamiltonian import Model
 
     ops = operators.spin1(sym)
     geo = None if os.path.exists(spec) or (spec.startswith("bp:") and os.path.exists(spec[3:])) \
         else lattice.geometry(cell, dims=cell_dims)
-    kw = {"schedule": tuple(schedule)} if schedule else {}
     if os.path.exists(spec):
         psi = io.load_state(spec, ops.config)
-    elif spec == "bp":
-        psi = states.random_product_peps(geo, ops, seed=rng)
-        evolve.evolve(psi, Model(theta), ops, D, **kw)
-    elif spec.startswith("bp:"):
-        src = spec[3:]
-        psi = io.load_state(src, ops.config) if os.path.exists(src) else states.product_peps(geo, states.seed_vectors(src), ops)
-        evolve.evolve(psi, Model(theta), ops, D, **kw)
+    elif spec == "bp" or spec.startswith("bp:"):
+        taus = tuple(schedule) if schedule else evolve.DEFAULT_SCHEDULE
+        progress = io.read_json(f"{partial}.json") if partial and os.path.exists(f"{partial}.json") else None
+        if progress is not None and progress["id"] == json.loads(json.dumps(partial_id)) and os.path.exists(partial):
+            psi, done = io.load_state(partial, ops.config), progress["taus_done"]
+            print(f"seed: continuing {partial} at tau {taus[done] if done < len(taus) else '-'}", flush=True)
+        elif spec == "bp":
+            psi, done = states.random_product_peps(geo, ops, seed=rng), 0
+        else:
+            src = spec[3:]
+            psi = io.load_state(src, ops.config) if os.path.exists(src) else states.product_peps(geo, states.seed_vectors(src), ops)
+            done = 0
+        res = evolve.evolve(psi, Model(theta), ops, D, schedule=taus[done:], deadline=deadline)
+        if res.timed_out:
+            if partial is None:
+                raise ValueError("seed_state: a deadline needs a partial path to keep the evolution")
+            io.save_state(partial, psi)  # the unfinished tau is rerun from this state
+            io.write_json(f"{partial}.json", {"id": partial_id, "taus_done": done + len(res.stages) - 1})
+            return None
     elif spec == "random":
         psi = states.random_product_peps(geo, ops, seed=rng)
     else:
@@ -226,10 +243,22 @@ def run_variational(cfg, log=print):
             chain = load_chain(k)
             log(f"resumed {ck} at step {len(chain.history)}")
         else:
-            psi = (seed_state(o["seed"], D, theta, o["sym"], o["noise"], o["rng"], o["cell"], o["schedule"], o["cell_dims"]) if k == 0
-                   else io.load_state(_stage_checkpoint(out, chis, k - 1), np_config))
+            partial = f"{out}.seed.pkl"  # an evolving seed cut by the deadline; resumed by the next run
+            psi = (seed_state(o["seed"], D, theta, o["sym"], o["noise"], o["rng"], o["cell"], o["schedule"], o["cell_dims"],
+                              deadline=opt_deadline, partial=partial, partial_id={**run_info["init"], "D": D,
+                                                                                  "theta_over_pi": o["theta_over_pi"], "sym": o["sym"]})
+                   if k == 0 else io.load_state(_stage_checkpoint(out, chis, k - 1), np_config))
+            if psi is None:
+                log(f"max_hours reached while evolving the seed; kept in {partial}, run the same config again")
+                rec = {"task": "variational", "out": out, "status": "time", "seed_partial": partial,
+                       "options": o, "metadata": meta, "init": run_info["init"], "sessions": run_info["sessions"]}
+                io.write_json(f"{out}.json", rec)
+                return rec
             chain = make_chain(k, var.convert(psi, ops.config))
             chain.save(ck)  # so that a deadline before the first step still leaves a resumable stage
+            for f in (partial, f"{partial}.json"):
+                if k == 0 and os.path.exists(f):
+                    os.remove(f)
             if k:
                 log(f"stage {k}: chi {chis[k - 1]} stalled; continuing at chi {chis[k]}")
         status = chain.run(max_steps=o["max_steps"], deadline=opt_deadline, **run_kw)
@@ -297,6 +326,8 @@ def _run_provenance(out, o):
         if changed:
             raise ValueError(f"{out}: the chain was started with {({k: old[k] for k in changed})}, "
                              f"not {({k: init[k] for k in changed})}; use another out")
+    elif os.path.exists(path) and io.read_json(path)["init"] == init:
+        info = io.read_json(path)  # an unfinished start (e.g. a seed cut by max_hours) with these options
     else:
         legacy = os.path.exists(f"{out}.pt")
         info = {"init": {**init, **({"unverified": True} if legacy else {})}, "sessions": []}

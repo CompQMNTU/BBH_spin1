@@ -289,12 +289,30 @@ def test_variational_task_resumes_a_step_limit(tmp_path):
 def test_variational_task_stops_cleanly_before_the_first_step(tmp_path):
     pytest.importorskip("torch")
     out = str(tmp_path / "r")
-    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": out, "chi": 8, "max_steps": 1, "max_hours": 1e-9}
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "FM", "out": out, "chi": 8, "max_steps": 1, "max_hours": 1e-9}
     rec = runs.run_variational(cfg, log=lambda s: None)
     assert rec["status"] == "time" and rec["history"] == [] and "validation" not in rec
     assert os.path.exists(out + ".pt") and os.path.exists(out + ".pkl")
     rec = runs.run_variational({**cfg, "max_hours": None, "validate": False}, log=lambda s: None)
     assert rec["status"] == "max_steps" and len(rec["history"]) == 1
+
+
+@torch_needed
+def test_seed_evolution_stops_at_the_deadline_and_resumes(tmp_path, capsys):
+    pytest.importorskip("torch")
+    out = str(tmp_path / "r")
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": out, "chi": 8, "max_steps": 1, "max_hours": 1e-9,
+           "schedule": [0.1, 0.05], "validate": False}
+    rec = runs.run_variational(cfg, log=lambda s: None)  # cut after the first Trotter step
+    assert rec["status"] == "time" and rec["seed_partial"] == out + ".seed.pkl" and not os.path.exists(out + ".pt")
+    assert io.read_json(out + ".seed.pkl.json")["taus_done"] == 0
+    rec = runs.run_variational({**cfg, "max_hours": None}, log=lambda s: None)
+    assert "continuing" in capsys.readouterr().out  # the cut tau is rerun from the kept state
+    assert rec["status"] == "max_steps" and len(rec["sessions"]) == 2 and not os.path.exists(out + ".seed.pkl")
+    runs.run_variational({**cfg, "out": out + "2"}, log=lambda s: None)  # other seed options discard the kept evolution
+    capsys.readouterr()
+    runs.run_variational({**cfg, "out": out + "2", "rng": 1, "max_hours": None}, log=lambda s: None)
+    assert "continuing" not in capsys.readouterr().out and len(io.read_json(out + "2.run.json")["sessions"]) == 1
 
 
 @torch_needed
@@ -358,7 +376,7 @@ def test_validation_stops_at_the_deadline_and_reserve_shortens_the_optimization(
     seen.clear()
     now[0] = t0 = real_time.time()
     rec = runs.run_variational({**cfg, "out": str(tmp_path / "q"), "max_hours": 1.0, "validate_reserve_hours": 1.0,
-                                "validate_chi": [6]}, log=lambda s: None)
+                                "validate_chi": [6], "seed": "FM"}, log=lambda s: None)  # FM: no seed evolution to cut
     assert rec["status"] == "time" and seen == [[6]]
     assert "validation" not in rec and set(rec["validation_interim"]["energies"]) == {6}
 
