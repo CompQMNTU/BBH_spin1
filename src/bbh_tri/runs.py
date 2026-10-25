@@ -32,9 +32,13 @@ COMMON = {"task": None, "threads": 1}
 
 VARIATIONAL = {**COMMON, "theta_over_pi": None, "D": None, "seed": None, "out": None, "sym": "dense",
                "cell": "sqrt3", "cell_dims": None, "chi": None, "max_steps": 200, "noise": 1e-3, "rng": 0, "max_sweeps": 100,
-               "device": "cpu", "max_hours": None, "tol_E": 1e-8, "tol_grad": 1e-6,
+               "ad": "unrolled", "device": "cpu", "max_hours": None, "tol_E": 1e-8, "tol_grad": 1e-6,
                "stall_window": 5, "stall_min_evals": 25, "stall_gain": 2e-8,
                "validate": True, "validate_chi": None, "validate_reserve_hours": 0, "schedule": None}
+
+# gradient of the CTM energy (variational.Chain): backpropagation through every sweep, or implicit
+# differentiation of the fixed point (fp_ctmrg; docs/ad_workflow.md §3)
+AD_MODES = ("unrolled", "fp")
 
 # options that make the initial state; a resumed chain must have been started with the same ones
 INIT_KEYS = ("seed", "noise", "rng", "schedule", "cell", "cell_dims")
@@ -183,6 +187,8 @@ def run_variational(cfg, log=print):
     written to OUT.json (``status`` of the last stage; 'time' = stopped by ``max_hours``, resume
     by running the same config again)."""
     o = options(cfg, VARIATIONAL, "variational")
+    if o["ad"] not in AD_MODES:
+        raise ValueError(f"task 'variational': ad must be one of {AD_MODES}, not {o['ad']!r}")
     import torch
     import yastn.tn.fpeps as fpeps
 
@@ -210,15 +216,19 @@ def run_variational(cfg, log=print):
 
     def make_chain(k, psi):
         ck = _stage_checkpoint(out, chis, k)
-        return var.Chain(psi, model, ops, chis[k], max_sweeps=o["max_sweeps"], checkpoint=ck,
-                         log=lambda s: log(f"[chi {chis[k]}] {s}" if len(chis) > 1 else s))
+        return var.Chain(psi, model, ops, chis[k], max_sweeps=o["max_sweeps"], ad=o["ad"],
+                         checkpoint=ck, log=lambda s: log(f"[chi {chis[k]}] {s}" if len(chis) > 1 else s))
 
     def load_chain(k):
         """Chain resumed from stage k's checkpoint; Chain.load raises if it was made for another
         model, chi, CTM setting or tensor structure (the template defines the structure)."""
         ck = _stage_checkpoint(out, chis, k)
-        template = fpeps.Peps.from_dict(torch.load(ck, weights_only=False, map_location=o["device"])["template"],
-                                        config=ops.config)
+        saved = torch.load(ck, weights_only=False, map_location=o["device"])
+        ad_ck = (saved.get("meta") or {}).get("ad", "unrolled")
+        if ad_ck != o["ad"]:  # the L-BFGS history belongs to the other gradient; Chain.load would refuse too
+            raise ValueError(f"checkpoint {ck} was made with ad = {ad_ck!r}, not {o['ad']!r}; to continue this "
+                             f"state with ad = {o['ad']!r}, start another out with seed = {ck!r}")
+        template = fpeps.Peps.from_dict(saved["template"], config=ops.config)
         D_ck = max(d for s in template.sites() for d in template[s].get_shape()[:4])
         if D_ck != D:
             raise ValueError(f"checkpoint {ck} has D = {D_ck}, not {D}")

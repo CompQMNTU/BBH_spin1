@@ -72,6 +72,16 @@ Parameters are the raw data `t._data` of the unique site tensors (3 for √3×�
    - `dl` / `eye`: cold start, used on retry.
    - Warm start is an untested speed optimization. If it causes trouble, fall back to `dl`, as the upstream test does.
 3. **Fixed point.** **[impl]** Default is `ad="unrolled"`: plain backpropagation through every CTM sweep from `init="eye"` (`env.iterate_`), not `fp_ctmrg`. At D = 3 the CTM SVDs keep an exactly degenerate pair, and the implicit fixed-point gradient was wrong by a factor 10 on one such state (`docs/yastn_findings.md` U4b). `ad="fp"` (below) remains available. Unrolled memory grows with the number of sweeps (fine at D ≤ 3; profile at D ≥ 4). CTM options: `corner_tol` 1e-9 (1e-10 did not converge at D = 3), `max_sweeps` 500, `opts_svd tol` 1e-8.
+   **`ad="fp"` in production (2026-10-25).** `bbh-run` option `ad: fp` / `m4_variational.py --ad fp`. Memory no longer grows with the sweeps. `max_sweeps` caps the forward CTM sweeps (a forward that does not converge raises `NoFixedPointError`, which retries the step as in the unrolled case). It also caps the terms of the backward fixed-point series, which stops there without an error. The forward truncates with yastn's own `eps_multiplet`, not `gap_safe_truncation`. A checkpoint resumes only with its own `ad`; to switch, seed a new `out` with the old `OUT.pt` (a plain path, not `bp:PATH`, which would re-evolve the state). Gradient check at θ = 0, dense, inside `exact_svd_backward()` (pinned yastn, A100). The columns give AD / FD along −g and two seeded random directions:
+
+   | state | χ | ad | E | along g | random 1 | random 2 | GPU memory |
+   |---|---|---|---|---|---|---|---|
+   | D = 4 (χ = 48 for 1000 steps, then χ = 64 for 122) | 48 | unrolled | −1.831610486 | 9.7360e-4 / 9.7364e-4 | −1.1905e-5 / −1.1903e-5 | 1.4543e-5 / 1.4544e-5 | 41.6 GB |
+   | same | 48 | fp | −1.831610486 | 9.7395e-4 / 9.7363e-4 | −1.1855e-5 / −1.1903e-5 | 1.4452e-5 / 1.4544e-5 | 1.7 GB |
+   | same | 64 | fp | −1.831611596 | 8.7140e-4 / 8.7144e-4 | −5.6051e-6 / −5.6028e-6 | 1.9116e-5 / 1.9118e-5 | 2.9 GB |
+   | D = 5 (AD step 191) | 75 | fp | −1.833935693 | 3.66335e-3 / 3.66310e-3 | 9.11194e-5 / 9.11195e-5 | −1.74138e-5 / −1.74152e-5 | 8.4 GB |
+
+   All pass `fd_check` (tolerance 1.5e-6 at D = 4, 4.2e-6 at D = 5). At D = 4, χ = 48, the fp gradient differs from the unrolled one by 0.3 % (cos 0.999995). Unrolled at χ = 64 does not fit an 80 GB A100, and D = 5 needs ~300 GB unrolled on CPU. One fp evaluation at D = 5, χ = 75 took 279 s forward and 41 s backward on the GPU. The D = 3 failure above (an exactly degenerate pair on a fully converged state) is not excluded in general: keep `Chain`'s FD check after steps that zero a pair.
    ```python
    env = fp_ctmrg(env,
        ctm_opts_fwd={'method': '2x2', 'corner_tol': tol, 'max_sweeps': n, 'use_qr': False,
