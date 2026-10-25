@@ -286,6 +286,35 @@ def test_variational_task_resumes_a_step_limit(tmp_path):
 
 
 @torch_needed
+def test_variational_task_refuses_another_ad_on_resume(tmp_path):
+    pytest.importorskip("torch")
+    out = str(tmp_path / "r")
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "FM", "out": out, "chi": 8, "max_steps": 1, "max_hours": 1e-9}
+    with pytest.raises(ValueError, match="ad must be one of"):
+        runs.run_variational({**cfg, "ad": "implicit"}, log=lambda s: None)
+    runs.run_variational(cfg, log=lambda s: None)  # a checkpoint before the first step, ad = 'unrolled'
+    with pytest.raises(ValueError, match=r"made with ad = 'unrolled', not 'fp'.*start another out with seed"):
+        runs.run_variational({**cfg, "ad": "fp"}, log=lambda s: None)
+
+
+@torch_needed
+@pytest.mark.slow
+def test_variational_task_runs_an_fp_chain(tmp_path):
+    pytest.importorskip("torch")
+    import torch
+    out = str(tmp_path / "r")
+    seed = str(tmp_path / "unrolled")
+    runs.run_variational({"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": seed, "chi": 8, "max_steps": 1,
+                          "validate": False}, log=lambda s: None)
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": seed + ".pt", "out": out, "chi": 8, "max_steps": 2, "ad": "fp",
+           "validate": False}  # an unrolled chain's state continued with the fp gradient
+    rec = runs.run_variational(cfg, log=lambda s: None)
+    assert len(rec["history"]) == 2 and rec["options"]["ad"] == "fp"
+    assert torch.load(out + ".pt", weights_only=False)["meta"]["ad"] == "fp"
+    assert rec["history"][-1]["energy"] <= rec["history"][0]["energy"]
+
+
+@torch_needed
 def test_variational_task_stops_cleanly_before_the_first_step(tmp_path):
     pytest.importorskip("torch")
     out = str(tmp_path / "r")

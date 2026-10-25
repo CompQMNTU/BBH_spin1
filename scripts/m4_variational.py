@@ -33,6 +33,11 @@ loops and gains nothing. Keep the node's total within its worker budget.
 backward pass, so memory grows with the sweep count; an evaluation that does not converge within
 the cap fails the step, which is retried after a perturbation. The log records the sweeps of each
 evaluation. A checkpoint may be resumed with another --max-sweeps.
+``--ad fp`` differentiates the CTM fixed point implicitly (``fp_ctmrg``) instead of backpropagating
+through every sweep: memory no longer grows with the sweeps (theta = 0, dense D = 5, chi = 75:
+8.4 GB on a GPU, against ~300 GB unrolled on CPU). ``--max-sweeps`` then caps the forward CTM sweeps
+and the terms of the backward fixed-point series. A checkpoint resumes only with its own --ad; to
+switch, start another --out with --seed OUT.pt (docs/ad_workflow.md §3).
 ``--max-hours`` stops cleanly before a batch-system time limit (status 'time', no validation);
 rerun the same command to resume.
 """
@@ -68,6 +73,7 @@ def main():
     p.add_argument("--rng", type=int, default=0)
     p.add_argument("--threads", type=int, default=1, help="BLAS/OpenMP/torch threads (pays for dense only)")
     p.add_argument("--max-sweeps", type=int, default=100, help="CTM sweeps per evaluation (bounds AD memory)")
+    p.add_argument("--ad", default="unrolled", help="unrolled | fp (gradient through the CTM)")
     p.add_argument("--device", default="cpu", help="torch device for the AD chain, e.g. cuda:0")
     p.add_argument("--max-hours", type=float, default=None, help="stop cleanly after this wall time")
     p.add_argument("--stall-window", type=int, default=5, help="steps in the stall test (0 disables it)")
@@ -78,7 +84,7 @@ def main():
     chi = None if a.chi is None else [c if c.upper().endswith("D2") else int(c) for c in a.chi]
     cfg = {"theta_over_pi": a.theta_over_pi, "D": a.D, "seed": a.seed, "sym": a.sym, "out": a.out, "chi": chi,
            "max_steps": a.max_steps, "noise": a.noise, "rng": a.rng, "threads": a.threads, "max_sweeps": a.max_sweeps,
-           "device": a.device, "max_hours": a.max_hours, "stall_window": a.stall_window, "validate": not a.no_validate}
+           "ad": a.ad, "device": a.device, "max_hours": a.max_hours, "stall_window": a.stall_window, "validate": not a.no_validate}
     try:
         rec = run_variational(cfg, log=lambda s: print(s, flush=True))
     except ValueError as e:
