@@ -1,0 +1,10 @@
+# D -> inf, paper method (midpoint of the lowest energy and the 1/D-fit intercept, error half the
+# difference). Reference: Niesen & Corboz, PRB 97, 245146 (2018): E(theta = 0, D -> inf) = -1.8368(5).
+task: extrapolate
+reference: [-1.8368, 0.0005]
+# dense validated energies, 2026-10-26 (docs/milestones.md; D = 4, 5 unconverged upper bounds)
+points:
+  - [2, -1.7929888]
+  - [3, -1.8199089]
+  - [4, -1.831611]
+  - [5, -1.8340665]
