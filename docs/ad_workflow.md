@@ -82,11 +82,12 @@ Parameters are the raw data `t._data` of the unique site tensors (3 for √3×�
    | D = 5 (AD step 191) | 75 | fp | −1.833935693 | 3.66335e-3 / 3.66310e-3 | 9.11194e-5 / 9.11195e-5 | −1.74138e-5 / −1.74152e-5 | 8.4 GB |
 
    All pass `fd_check` (tolerance 1.5e-6 at D = 4, 4.2e-6 at D = 5). At D = 4, χ = 48, the fp gradient differs from the unrolled one by 0.3 % (cos 0.999995). Unrolled at χ = 64 does not fit an 80 GB A100, and D = 5 needs ~300 GB unrolled on CPU. One fp evaluation at D = 5, χ = 75 took 279 s forward and 41 s backward on the GPU. The D = 3 failure above (an exactly degenerate pair on a fully converged state) is not excluded in general: keep `Chain`'s FD check after steps that zero a pair.
+   **Cut collisions under fp (2026-10-26).** `Chain`'s fp path passes no `truncation_f`, so its CTM SVDs cut at exactly `D_total` = χ. A near-degenerate pair can then straddle the cut, and `svd_backward` raises `DegenerateSVDWarning` (gap < `DEGENERACY_RTOL` 1e-10 σmax) in the backward fixed-point vjp; perturbation retries do not move the cut, so the chain ends `failed` after `max_failures`. The unrolled path avoids this with `gap_safe_truncation`. Seen at θ = 0, D = 5: at χ = 75 (step 166) the pair σ₇₄ / σ₇₅ = 1.3688e-8 / 1.3612e-8 σmax (relative gap 0.56 %), and after a restart at χ = 74 again at step 36 (σ₇₃ / σ₇₄ = 1.3591e-8 / 1.3533e-8 σmax). It is a genuine close pair in a dense spectral tail, not roundoff, and as the optimization pushes values above it the pair moves onto the new cut, so lowering χ by hand only delays the stop. Open: a gap-safe cut for fp (choose `D_total` per evaluation, or `mask_f` after a yastn bump; issue #22).
    ```python
    env = fp_ctmrg(env,
        ctm_opts_fwd={'method': '2x2', 'corner_tol': tol, 'max_sweeps': n, 'use_qr': False,
                      'opts_svd': {'policy': 'fullrank', 'D_total': chi, 'tol': 1e-10},
-                     'truncation_f': multiplet_mask},     # see §6
+                     'truncation_f': multiplet_mask},     # see §6; design only, Chain's fp path passes none
        ctm_opts_fp={'opts_svd': {'policy': 'fullrank'}})
    ```
 4. **Energy per site.** For each unique anchor site (x,y), one `rdm2x2((x,y))` (81×81 for dense spin-1) contains every NN bond exactly once:
@@ -182,7 +183,7 @@ Resume picks up the latest checkpoint and reuses the env as a warm start. One HD
 - Set `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1` per chain; parallelize over chains (SLURM array), not threads.
 - GPU is optional: `fp_ctmrg(..., fwd_devices=...)` exists but is untested here.
 - Profile one step (forward + backward) at D = 2, 3, 4 with χ = 2D² before sizing the array jobs. The fullrank fixed-point SVD is the expected bottleneck at large χ.
-- **[impl] Memory (unrolled AD stores every CTM sweep).** Dense D = 4: ~88 GB on the CPU at χ = 48; on an 80 GB A100 χ = 48 fits and χ = 64 does not (~76 GB per evaluation; trial points OOM). Dense D = 5, χ = 75: ~5 GB per sweep, ~200 GB at a typical ~36 sweeps, 299 GB peak seen; budget ≥ 320 GB at `max_sweeps` 50.
+- **[impl] Memory (unrolled AD stores every CTM sweep).** Dense D = 4: ~88 GB on the CPU at χ = 48; on an 80 GB A100 χ = 48 fits and χ = 64 does not (~76 GB per evaluation; trial points OOM). Dense D = 5, χ = 75: ~5 GB per sweep, ~200 GB at a typical ~36 sweeps, peaks reached ~310 GB (cause not pinned down); budget ≥ 320 GB at `max_sweeps` 50.
 
 ## 10. First experiment (proposed acceptance for this workflow)
 
