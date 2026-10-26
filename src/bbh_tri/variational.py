@@ -150,7 +150,7 @@ class Chain:
             opts_svd["eps_multiplet"] = eps_multiplet
         self.ctm_fwd = {"method": "2x2", "corner_tol": corner_tol, "max_sweeps": max_sweeps,
                         "use_qr": False, "opts_svd": opts_svd}
-        # unrolled AD: the cut keeps or drops multiplets whole (relative gap eps_multiplet, across
+        # CTM for both ad modes: the cut keeps or drops multiplets whole (relative gap eps_multiplet, across
         # blocks) and never splits a near-degenerate pair within a block (yastn_compat.gap_safe_truncation)
         self.truncation_f = gap_safe_truncation(svd_tol, chi, eps_multiplet=eps_multiplet)
         # One L-BFGS iteration per step(). torch caps the line search at max_eval - 1 evaluations and
@@ -202,7 +202,10 @@ class Chain:
         env = fpeps.EnvCTM(psi, init="eye")
         if self.ad == "fp":
             with contextlib.redirect_stdout(io.StringIO()):
-                env = fp_ctmrg(env, ctm_opts_fwd=self.ctm_fwd, ctm_opts_fp={"opts_svd": {"policy": "fullrank"}})
+                # the same gap-safe cut as unrolled; fp_ctmrg passes truncation_f on to its forward CTM,
+                # the gauge-fixing step and the backward fixed-point iteration
+                env = fp_ctmrg(env, ctm_opts_fwd={**self.ctm_fwd, "truncation_f": self.truncation_f},
+                               ctm_opts_fp={"opts_svd": {"policy": "fullrank"}})
         else:
             o = self.ctm_fwd
             info = env.iterate_(opts_svd=o["opts_svd"], method=o["method"], max_sweeps=o["max_sweeps"],

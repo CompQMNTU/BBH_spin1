@@ -115,3 +115,44 @@ def test_ntu_default_initialization_inflates_bonds_on_path_gates(initialization,
     fpeps.evolution_step_(fpeps.EnvNTU(psi), [tri], opts_svd={"D_total": 4, "tol": 1e-12},
                           initialization=initialization)
     assert max(d for s in psi.sites() for d in psi[s].get_shape()[:4]) == D_after
+
+
+@pytest.mark.ad
+def test_fp_ctmrg_passes_truncation_f_to_forward_and_backward():
+    """fp_ctmrg hands ctm_opts_fwd's truncation_f (as opts_svd['mask_f']) to the forward CTM, the
+    gauge-fixing step and the backward fixed-point iteration, so one mask sets the cut everywhere
+    (its multi-GPU forward, fwd_devices, drops it). docs/yastn_findings.md, U4c."""
+    torch = pytest.importorskip("torch")
+    from yastn.tn.fpeps.envs.fixed_pt import fp_ctmrg
+    from bbh_tri.yastn_compat import exact_svd_backward
+    ops = yastn.operators.Spin1(sym="dense", backend="torch", default_dtype="float64")
+    geo = fpeps.TriangularLattice()
+    ops.random_seed(seed=3)
+    product = fpeps.product_peps(geo, ops.vec_z(val=1))
+    params, tensors = [], {}
+    for s in geo.sites():
+        legs = product[s].get_legs()
+        legs = [yastn.Leg(ops.config, s=leg.s, D=(2,)) for leg in legs[:4]] + list(legs[4:])
+        t = yastn.rand(ops.config, legs=legs)
+        params.append(t._data.clone().requires_grad_())
+        t._data = params[-1] / params[-1].norm()
+        tensors[s] = t
+    calls = []
+
+    def keep5(S):  # keep the 5 largest values (no gap is near-degenerate on this random state)
+        calls.append(1)
+        mask = S.copy()
+        s = sorted(mask._data.detach().tolist(), reverse=True)
+        mask._data = mask._data >= s[min(5, len(s)) - 1]
+        return mask
+    with exact_svd_backward():
+        env = fp_ctmrg(fpeps.EnvCTM(fpeps.Peps(geo, tensors=tensors), init="eye"),
+                       ctm_opts_fwd={"method": "2x2", "corner_tol": 1e-10, "max_sweeps": 300, "use_qr": False,
+                                     "opts_svd": {"policy": "fullrank", "D_total": 8, "tol": 1e-8},
+                                     "truncation_f": keep5},
+                       ctm_opts_fp={"opts_svd": {"policy": "fullrank"}})
+        assert all(env[s].tl.get_shape() == (5, 5) for s in geo.sites())  # forward: the mask, not D_total = 8
+        n_forward = len(calls)
+        sum(env[s].tl.norm() for s in geo.sites()).backward()
+    assert len(calls) > n_forward  # backward fixed-point iteration
+    assert all(torch.isfinite(p.grad).all() for p in params)

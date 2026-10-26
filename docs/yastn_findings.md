@@ -99,6 +99,10 @@ Setup: θ = π/4, √3×√3, dense, D = 3 EnvBP states, χ = 18, loss = E/site 
 - **`fp_ctmrg` (implicit fixed-point backward) can be wrong on such a state.** On a fully converged D = 3 EnvBP state it missed FD by a factor 10 (AD 0.145 vs FD 0.0144; AD also changed with `corner_tol`, FD did not), with or without zeroing. On a less converged D = 3 state with the same degeneracy it was right (3e-6). Presumably the gauge fixing of the fixed point is not unique on a degenerate spectrum. Not pinned by a canary (no cheap reproducer); the driver defaults to `ad="unrolled"`.
 - **`fp_ctmrg` forward at `corner_tol = 1e-10`** did not converge in 500 sweeps on the D = 3 state (`NoFixedPointError`); 1e-9 does.
 
+## U4c — `fp_ctmrg` applies `truncation_f` everywhere (M4, 2026-10-26)
+
+At the pinned commit `fp_ctmrg` forwards every key of `ctm_opts_fwd` besides `method`, `max_sweeps`, `opts_svd` and `corner_tol` to `EnvCTM.ctmrg_`, and copies `ctm_opts_fwd` (updated by `ctm_opts_fp`) into the options of the gauge-fixing CTM step and of the backward fixed-point iteration (`FixedPoint.fixed_point_iter`, `env.update_`). `proj_corners` turns `truncation_f` into `opts_svd['mask_f']`, so one mask sets the cut in the forward, the gauge fixing and the backward. Only the multi-GPU forward (`fwd_devices` with more than one device, `iterate_D_`) passes `truncation_f=None`. The backward runs the CTM step under `torch.func.vjp`, whose wrapped tensors have no storage: `.numpy()` raises `RuntimeError: Cannot access data pointer of Tensor that doesn't have storage`, while `.tolist()` and `.item()` work, so a mask must read the spectrum with `tolist` (`gap_safe_truncation` does). Canary: `test_yastn_canaries.py::test_fp_ctmrg_passes_truncation_f_to_forward_and_backward` (a keep-5 mask at `D_total` = 8 gives 5×5 corners and is called again in the backward). `Chain(ad="fp")` passes its `gap_safe_truncation` mask this way (issue #22).
+
 ## CTM truncation at D = 4: cut through a multiplet (M4, 2026-10-18)
 
 Two AD chains at θ = π/4, D = 4, χ = 32 stopped after 4 failed steps each, both at line-search trial points (reproduced from the checkpoints):

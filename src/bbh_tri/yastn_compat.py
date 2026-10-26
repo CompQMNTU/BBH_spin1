@@ -185,8 +185,10 @@ def gap_safe_truncation(tol, D_total, margin=10 * DEGENERACY_RTOL, eps_multiplet
     1e-10 sigma_max straddled the tol cut and failed the gradient.
     """
     def mask_f(S):
-        be = S.config.backend
-        s = np.asarray(be.to_numpy(S.data), dtype=float)
+        # tolist, not to_numpy: fp_ctmrg's backward calls this under torch.func.vjp, whose wrapped
+        # tensors have no storage for .numpy()
+        d = S.data
+        s = np.asarray(d.detach().tolist() if hasattr(d, "detach") else S.config.backend.to_numpy(d), dtype=float)
         block = np.empty(len(s), dtype=int)
         bmax = []
         for b, sl in enumerate(S.slices):
