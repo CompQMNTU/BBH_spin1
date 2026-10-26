@@ -183,7 +183,7 @@ Resume picks up the latest checkpoint and reuses the env as a warm start. One HD
 - Set `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1` per chain; parallelize over chains (SLURM array), not threads.
 - GPU is optional: `fp_ctmrg(..., fwd_devices=...)` exists but is untested here.
 - Profile one step (forward + backward) at D = 2, 3, 4 with χ = 2D² before sizing the array jobs. The fullrank fixed-point SVD is the expected bottleneck at large χ.
-- **[impl] Memory (unrolled AD stores every CTM sweep).** Dense D = 4: ~88 GB on the CPU at χ = 48; on an 80 GB A100 χ = 48 fits and χ = 64 does not (~76 GB per evaluation; trial points OOM). Dense D = 5, χ = 75: ~5 GB per sweep, ~200 GB at a typical ~36 sweeps, 299 GB peak seen; budget ≥ 320 GB at `max_sweeps` 50.
+- **[impl] Memory (unrolled AD stores every CTM sweep).** Dense D = 4: ~88 GB on the CPU at χ = 48; on an 80 GB A100 χ = 48 fits and χ = 64 does not (~76 GB per evaluation; trial points OOM). Dense D = 5, χ = 75: ~5 GB per sweep, ~200 GB at a typical ~36 sweeps, peaks reached ~310 GB (cause not pinned down); budget ≥ 320 GB at `max_sweeps` 50.
 
 ## 10. First experiment (proposed acceptance for this workflow)
 
