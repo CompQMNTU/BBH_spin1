@@ -85,8 +85,12 @@ def test_svd_backward_absolute_regularizer_is_wrong_for_small_singular_values():
 
 @pytest.mark.parametrize("kw", [{"full_patch": True}, {"dims": (2, 3), "boundary": "obc", "full_patch": True}])
 def test_triangular_to_dict_loses_geometry(ops, kw):
+    """Upstream TriangularLattice.to_dict (bbh_tri.yastn_compat replaces it on import) keeps only the
+    site pattern; from_dict then rebuilds the constructor defaults."""
+    from bbh_tri.yastn_compat import _UPSTREAM_TRIANGULAR_TO_DICT
     psi = fpeps.product_peps(fpeps.TriangularLattice(**kw), ops.vec_z(val=1))
-    g = fpeps.Peps.from_dict(psi.to_dict()).geometry
+    d = {**psi.to_dict(), "geometry": _UPSTREAM_TRIANGULAR_TO_DICT(psi.geometry)}
+    g = fpeps.Peps.from_dict(d).geometry
     assert (g.dims, g.boundary, g.full_patch) == ((3, 3), "infinite", False)  # constructor defaults
 
 
@@ -156,3 +160,100 @@ def test_fp_ctmrg_passes_truncation_f_to_forward_and_backward():
         sum(env[s].tl.norm() for s in geo.sites()).backward()
     assert len(calls) > n_forward  # backward fixed-point iteration
     assert all(torch.isfinite(p.grad).all() for p in params)
+
+
+@pytest.mark.ad
+@pytest.mark.slow
+def test_fp_ctmrg_gradient_wrong_on_patch_cells():
+    """fp_ctmrg's implicit gradient misses finite differences by O(1) on full_patch cells, also for
+    the NN model and with the geometry-preserving to_dict (unrolled AD is exact there);
+    variational.Chain refuses ad='fp' on them. docs/yastn_findings.md, U4d."""
+    pytest.importorskip("torch")
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_variational import directional
+    from bbh_tri import evolve, lattice, operators, states, variational as var
+    from bbh_tri.hamiltonian import Model
+    ops = operators.spin1("dense")
+    psi = states.random_product_peps(lattice.geometry("patch", (2, 2)), ops, seed=1)
+    evolve.evolve(psi, Model(0.1), ops, 2, schedule=(0.1,), max_steps=20)
+    tops = var.torch_ops()
+    ch = var.Chain(var.convert(psi, tops.config), Model(0.1), tops, chi=8)
+    ch.ad = "fp"
+    ad, fd = directional(ch, "zero")
+    assert abs(ad - fd) > 0.5 * abs(fd)  # measured: AD -0.0201, FD -0.2380
+
+
+def test_path_gate_through_one_tensor_twice_runs_silently():
+    """On the sqrt3 cell an NNN path starts and ends on the same unit-cell tensor; evolution_step_
+    applies the gate without an error, though no correct result is possible. lattice.gate_paths
+    drops such paths (docs/yastn_findings.md, U1b)."""
+    from bbh_tri import lattice, operators, states
+    ops3 = operators.spin1("dense")
+    geo = lattice.geometry("sqrt3")
+    path = lattice.paths(geo, lattice.bonds(geo, "nnn_d")[0])[0]
+    assert len({geo.site2index(s) for s in path}) < len(path)
+    psi = states.random_product_peps(geo, ops3, seed=1)
+    g = fpeps.gates.gate_nn_exp(0.1, ops3.I(), operators.h_bond(ops3, 0.1, 0.0))._replace(sites=path)
+    fpeps.evolution_step_(fpeps.EnvBP(psi), [g], opts_svd={"D_total": 4, "tol": 1e-12})  # no error
+
+
+def _ctm_fu_setup(dims, D, chi, steps, J2=0.0):
+    """A BP-evolved D state on a patch cell (sqrt3 if dims is None), its converged EnvCTM, and the
+    first-order model gates (3-site MPOs: NN triangles, routed NNN)."""
+    from bbh_tri import evolve, gates, lattice, operators, states
+    from bbh_tri.hamiltonian import Model
+    ops3 = operators.spin1("dense")
+    geo = lattice.geometry("sqrt3") if dims is None else lattice.geometry("patch", dims)
+    model = Model(0.0, J2=J2)
+    psi = states.random_product_peps(geo, ops3, seed=1)
+    evolve.evolve(psi, model, ops3, D, schedule=(0.1,), max_steps=steps, check_every=steps)
+    return psi, converged_ctm(psi, chi, max_sweeps=30, corner_tol=1e-9), gates.model_gates(geo, model, ops3, 0.05, 0)
+
+
+def test_ctm_full_update_of_mpo_gate_raises():
+    """Full update (EnvCTM metric) of a 3-site MPO gate with the default method='mpo': the whole
+    gate enlarges both path bonds, and bond_metric cannot contract the still-enlarged (hard-fused)
+    neighbouring bond (docs/yastn_findings.md, full update)."""
+    psi, env, gl = _ctm_fu_setup(None, 2, 4, 3)
+    with pytest.raises(yastn.YastnError, match="hard-fused"):
+        fpeps.evolution_step_(env, gl[:1], opts_svd={"D_total": 2, "tol": 1e-12})
+
+
+def test_ctm_full_update_split_gates_need_post_truncation_opts():
+    """method='NN' with EnvCTM: truncate_ always calls post_truncation_ -> update_bond_, which reads
+    env.opts_svd unless opts_post_truncation passes opts_svd; EnvCTM never sets it."""
+    psi, env, gl = _ctm_fu_setup(None, 2, 4, 3)
+    with pytest.raises(AttributeError, match="opts_svd"):
+        fpeps.evolution_step_(env, gl[:1], opts_svd={"D_total": 2, "tol": 1e-12}, method="NN")
+
+
+def test_split_gate_2site_enlarges_the_physical_leg():
+    """split_gate_2site SVDs the middle MPO tensor across (in, left) | (out, right): the pieces
+    carry the 9-dim MPO bond on the middle site's physical leg (3 -> 27) between the two pieces."""
+    from yastn.tn.fpeps._evolution import split_gate_2site
+    from bbh_tri import gates, lattice, operators
+    from bbh_tri.hamiltonian import Model
+    ops3 = operators.spin1("dense")
+    g = gates.model_gates(lattice.geometry("sqrt3"), Model(0.0), ops3, 0.05, 0)[0]
+    assert [t.get_shape() for t in g.G] == [(3, 3, 9), (3, 3, 9, 9), (3, 3, 9)]
+    a, b = split_gate_2site(g)
+    assert [t.get_shape() for t in a.G] == [(3, 3, 9), (27, 3, 9)]
+    assert [t.get_shape() for t in b.G] == [(3, 27, 9), (3, 3, 9)]
+
+
+@pytest.mark.slow
+def test_ctm_full_update_of_split_gates_fails_at_d3():
+    """With method='NN' and opts_post_truncation the split gates run at D = 2 but not at D = 3:
+    on the (3, 3) cell (theta = 0, J2 = 0.1, chi = 9) the 9th gate's EAT initialization finds no
+    metric eigenvalue above the cutoff (ValueError); initialization='SVD' fails with
+    ZeroDivisionError instead (zero metric norm of the state)."""
+    import warnings
+    psi, env, gl = _ctm_fu_setup((3, 3), 3, 9, 6, J2=0.1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with pytest.raises(ValueError, match="zero-size array"):
+            for g in gl:
+                fpeps.evolution_step_(env, [g], opts_svd={"D_total": 3, "tol": 1e-12}, method="NN",
+                                      opts_post_truncation={"opts_svd": {"D_total": 9, "tol": 1e-14}})

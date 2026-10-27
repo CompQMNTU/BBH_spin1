@@ -6,9 +6,13 @@
   (2% at chi=8, 40% at chi=16 for a D=2 test state). ``exact_svd_backward`` installs
   :func:`svd_backward`, which uses exact inverses (0 only at exactly 0) and warns with
   :class:`DegenerateSVDWarning` when numerically degenerate singular values carry gradient.
-- Serialization: ``TriangularLattice.to_dict`` keeps only ``pattern``, so ``Peps.from_dict``
-  rebuilds the default geometry (a full_patch or OBC state silently changes shape).
-  ``peps_to_dict`` stores the constructor arguments instead.
+- Serialization: ``TriangularLattice.to_dict`` keeps only ``pattern``, so ``from_dict`` (which
+  calls ``TriangularLattice(**d)``) rebuilds the default geometry: a full_patch or OBC state or
+  environment silently changes shape. ``fp_ctmrg`` round-trips its environment this way, so on a
+  patch cell it returned a wrong environment ((3, 3): energy off by 6e-4) or crashed ((2, 2),
+  (2, 3), (6, 6)). Importing this module replaces ``TriangularLattice.to_dict`` with
+  :func:`_triangular_to_dict`, which adds the constructor arguments; ``peps_to_dict`` does the same
+  for a Peps explicitly.
 """
 
 import contextlib
@@ -252,6 +256,19 @@ def exact_svd_backward(kept_degenerate="warn"):
     finally:
         _KEPT_DEGENERATE = previous
         undo()
+
+
+_UPSTREAM_TRIANGULAR_TO_DICT = fpeps.TriangularLattice.to_dict
+
+
+def _triangular_to_dict(self):
+    """Upstream ``TriangularLattice.to_dict`` plus ``dims``, ``boundary`` and ``full_patch``,
+    the constructor arguments that ``from_dict`` needs to rebuild the same geometry."""
+    return {**_UPSTREAM_TRIANGULAR_TO_DICT(self), "dims": list(self.dims), "boundary": self.boundary,
+            "full_patch": self.full_patch}
+
+
+fpeps.TriangularLattice.to_dict = _triangular_to_dict
 
 
 def peps_to_dict(psi):

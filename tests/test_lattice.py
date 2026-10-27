@@ -32,7 +32,8 @@ def test_sublattice_matches_sqrt3_cell():
 
 
 def test_nnn_preserves_sublattice_nn_changes_it():
-    """NNN bonds connect the same 3-sublattice, so the sqrt3 cell stays valid with J2 (SPEC §2.1)."""
+    """NNN bonds connect the same 3-sublattice, so the sqrt3 cell can hold states with J2 (SPEC §2.1);
+    NNN gates cannot be routed there (test_gate_paths_visit_each_tensor_once)."""
     for r in range(-3, 4):
         for c in range(-3, 4):
             s = Site(r, c)
@@ -94,7 +95,31 @@ def test_paths_match_routing_test_patch():
 
 
 def test_path_variant_cycles():
-    geo = lattice.geometry("sqrt3")
+    geo = lattice.geometry("patch", (3, 3))
     b = lattice.bonds(geo, "nnn_k1")[0]
     ps = lattice.paths(geo, b)
+    assert len(ps) == 3 and lattice.gate_paths(geo, b) == ps
     assert [lattice.path(geo, b, i) for i in range(2 * len(ps))] == ps + ps
+
+
+@pytest.mark.parametrize("kind,dims,n_paths", [
+    ("sqrt3", None, {"nnn_d": 0, "nnn_k1": 0, "nnn_k2": 0}),  # every NNN pair shares a tensor
+    ("patch", (2, 2), {"nnn_d": 2, "nnn_k1": 1, "nnn_k2": 1}),
+    ("patch", (3, 3), {"nnn_d": 2, "nnn_k1": 3, "nnn_k2": 3}),
+    ("patch", (6, 6), {"nnn_d": 2, "nnn_k1": 3, "nnn_k2": 3}),
+    ("obc", (3, 3), None)])
+def test_gate_paths_visit_each_tensor_once(kind, dims, n_paths):
+    """A gate path may not pass a unit-cell tensor twice (yastn applies it silently and wrongly)."""
+    geo = lattice.geometry(kind, dims)
+    for cls in ALL_CLASSES:
+        for b in lattice.bonds(geo, cls):
+            gp = lattice.gate_paths(geo, b)
+            assert all(len({geo.site2index(s) for s in p}) == len(p) for p in gp)
+            assert set(gp) <= set(lattice.paths(geo, b))
+            if cls in lattice.NN_CLASSES or n_paths is None:
+                assert gp == lattice.paths(geo, b)
+            else:
+                assert len(gp) == n_paths[cls]
+    if kind == "sqrt3":
+        with pytest.raises(ValueError, match="patch cell"):
+            lattice.path(geo, lattice.bonds(geo, "nnn_d")[0])

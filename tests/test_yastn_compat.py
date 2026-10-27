@@ -347,3 +347,13 @@ def test_gap_safe_truncation_runs_under_torch_func_vjp():
         return x.sum()
     torch.func.vjp(f, S._data.clone())
     assert kept == [3]  # the pair at 1e-8 straddles the plain cut at 4: dropped whole
+
+
+@pytest.mark.parametrize("kw", [{}, {"dims": (2, 2), "full_patch": True}, {"dims": (2, 3), "boundary": "obc", "full_patch": True}])
+def test_triangular_to_dict_round_trips_geometry(ops, kw):
+    """With bbh_tri.yastn_compat imported, every to_dict/from_dict round trip (also inside fp_ctmrg)
+    keeps the triangular geometry."""
+    g0 = fpeps.TriangularLattice(**kw)
+    env = fpeps.EnvCTM(fpeps.product_peps(g0, ops.vec_z(val=1)), init="eye")
+    g = fpeps.EnvCTM.from_dict(env.to_dict()).psi.geometry
+    assert (g.dims, g.boundary, g.full_patch, g.sites()) == (g0.dims, g0.boundary, g0.full_patch, g0.sites())

@@ -96,6 +96,23 @@ def test_product_seed_on_a_nondefault_cell():
     assert len(psi.sites()) == 9
 
 
+def test_nnn_options_reach_the_seed_and_its_record(tmp_path):
+    """J2, K2 are task options; a bp seed with them evolves with NNN gates, which need a patch cell."""
+    r = runs.run_seed({"seed": "FQ", "D": 1, "theta_over_pi": 0.3, "J2": 0.2, "K2": -0.1, "cell": "patch",
+                       "cell_dims": [2, 2], "out": str(tmp_path / "fq.pkl")})
+    assert (r["J2"], r["K2"]) == (0.2, -0.1)
+    assert r["energy_chi_D2"] == pytest.approx(states.product_energy(Model(0.3 * np.pi, J2=0.2, K2=-0.1),
+                                                                     states.seed_vectors("FQ")), abs=1e-12)
+    with pytest.raises(ValueError, match="patch cell"):
+        runs.seed_state("bp:FQ", 2, 0.3 * np.pi, schedule=[0.1], J2=0.2)  # sqrt3 (patch-cell runs: test_nnn.py)
+
+
+def test_scan_records_without_nnn_fields_read_as_nn_sqrt3():
+    old = {"n_theta": 80, "D": 4, "env": "BP"}
+    assert scan.run_params(old) == {**scan.run_params({**old, "J2": 0.0, "K2": 0.0, "cell": "sqrt3"}), "cell_dims": None}
+    assert scan.run_params({**old, "J2": 0.1})["J2"] == 0.1
+
+
 def test_options_reject_unknown_and_missing_keys():
     with pytest.raises(ValueError, match="unknown option"):
         runs.options({"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": "x", "max_step": 3}, runs.VARIATIONAL, "variational")
@@ -143,6 +160,10 @@ def test_extrapolate_task_uses_the_best_seed_per_D_and_one_ladder(tmp_path):
                                                         "validation": {"energies": {"32": 1.0}}})
     with pytest.raises(ValueError, match="mix"):
         runs.run_extrapolate({"results": [str(tmp_path / "a.json"), str(tmp_path / "b.json")]})
+    io.write_json(str(tmp_path / "c.json"), {"D": 5, "theta_over_pi": 0.25, "sym": "U1xU1", "J2": 0.1,
+                                              "validation": {"energies": {"32": 1.0}}})
+    with pytest.raises(ValueError, match="mix"):  # same theta and symmetry, another J2
+        runs.run_extrapolate({"results": [str(tmp_path / "a.json"), str(tmp_path / "c.json")]})
     with pytest.raises(ValueError, match="two or more D"):
         runs.run_extrapolate({"points": [[4, 2.0], [4, 2.1]]})
 
@@ -272,6 +293,8 @@ def test_variational_task_escalates_chi_and_resumes(tmp_path):
         runs.run_variational({**cfg, "rng": 1}, log=lambda s: None)
     with pytest.raises(ValueError, match="was made for"):  # finished stages are identity-checked too
         runs.run_variational({**cfg, "theta_over_pi": 0.3}, log=lambda s: None)
+    with pytest.raises(ValueError, match="was made for"):  # the NNN couplings belong to the model
+        runs.run_variational({**cfg, "J2": 0.1}, log=lambda s: None)
 
 
 @torch_needed
@@ -418,7 +441,10 @@ def test_validate_task_records_D(tmp_path):
     saved = io.read_json(str(tmp_path / "v.json"))["options"]
     assert saved["max_sweeps"] == 300 and saved["corner_tol"] == runs.VALIDATE["corner_tol"]
     assert r["D"] == 1 and r["energies"][2] == pytest.approx(3 * (np.cos(0.75 * np.pi) + np.sin(0.75 * np.pi)))
-    assert runs._result_point(str(tmp_path / "v.json"), "max") == (1, pytest.approx(r["energies"][2]), (0.75, "dense"))
+    assert runs._result_point(str(tmp_path / "v.json"), "max") == (1, pytest.approx(r["energies"][2]),
+                                                                    (0.75, "dense", 0.0, 0.0))
+    r2 = runs.run_validate({"state": p, "theta_over_pi": 0.75, "J2": -0.2, "K2": 0.1, "chi": [1]})
+    assert r2["J2"] == -0.2 and r2["energies"][1] == pytest.approx(r["energies"][2] + 3 * (-0.2 + 0.1))  # FM: S.S = 1
 
 
 def test_seed_task_truncates_a_saved_state(tmp_path):

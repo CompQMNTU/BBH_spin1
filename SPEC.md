@@ -141,6 +141,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 - **NNN gates:**
   - (1,1): path (x,y)→(x,y+1)→(x+1,y+1) [or via (x+1,y)]; alternate the two paths between sweeps to avoid bias.
   - (−1,2), (2,−1): 4-site paths (Manhattan distance 3). Either straight-then-turn path; alternate. Expect higher truncation error — monitor `accumulated_truncation_error`.
+  - A path must visit each unit-cell tensor at most once (`evolution_step_` applies other paths silently and wrongly). On √3×√3 every NNN pair lies on one sublattice, so no NNN path qualifies: NNN evolution runs on patch cells, (3, 3) or (6, 6) with all paths, (2, 2) with one path per knight class (docs/yastn_findings.md U1b, M5). Measurement and AD are not affected.
 - Second-order Trotter: `gates.distribute(..., symmetrize=True)` only appends the reversed list of the gates **it** built (`gates.py`, `distribute`), with each gate built at step τ/2. Triangle and NNN gates are built by `bbh_tri.gates`, so do the same there: build every gate as exp(−(τ/2)h) and append the reversed list (optionally with reversed `sites`). τ schedule e.g. 0.1 → 0.05 → 0.02 → 0.01, stop on energy change < 1e-7 per stage.
 
 ### 4.3 Environment / measurement
@@ -150,7 +151,7 @@ Exact-diagonalization check (to write): primary role is catching operator / bond
 - Long-range ⟨S_0·S_r⟩, ⟨Q_0·Q_r⟩ via `measure_2site` → structure factors at Γ, K, M.
 
 ### 4.4 Unit cells to scan
-- √3×√3 (default `TriangularLattice()`): AFM3, AFQ, FQ, FM.
+- √3×√3 (default `TriangularLattice()`): AFM3, AFQ, FQ, FM. With J₂, K₂ ≠ 0 only for measurement and AD; evolve 3-sublattice states on (3, 3) (§4.2).
 - `full_patch=True` with dims (2,2), (3,3), (4,4), (6,6) (paper went up to 6×6 — add section/figure reference). (2,2) is required for stripe / 4-sublattice orders expected at larger J₂; (6,6) as a catch-all.
 - Commensurability: (2,2) and (4,4) **cannot** host 3-sublattice (AFM3/AFQ) order, and (3,3) cannot host stripe/4-sublattice order. Only (6,6) holds both. Energy comparisons across cells must account for this; a cell that frustrates the competing order is not evidence against it. (Classically the J₁–J₂ model turns into an incommensurate spiral for J₂ ≳ J₁, outside the planned J₂ ≤ 0.3 cut.)
 - Ground state at given parameters = lowest energy over all unit cells and initializations (random + phase-seeded + hysteresis from neighbors).

@@ -1,4 +1,4 @@
-"""Imaginary-time gates for the NN model (SPEC §4.2, option A).
+"""Imaginary-time gates (SPEC §4.2): NN triangles (option A) and routed NNN bonds.
 
 H = sum over up-triangles of h_tri; the up-triangle anchored at site b = (x, y) is
     a = b + (1, 0),  b,  c = b + (0, 1),
@@ -12,6 +12,12 @@ virtual...); the cut legs carry signature -1 on the left factor, as in ``gates.d
 
 On a finite OBC patch, triangles cut by the boundary are replaced by 2-site gates for the bonds
 they still contain (the 'd' bond routed along ``lattice.path``).
+
+NNN bonds (J2, K2) get one 2-site gate exp(-tau h) each, routed along a square-NN path
+(``lattice.path``: 3 sites for 'nnn_d', 4 for the knight classes) with identities on the inner
+sites; every bond on the path is truncated. Each bond has several paths; ``variant`` picks one
+cyclically, and ``evolve`` alternates it between Trotter steps (SPEC §4.2). Paths must visit each
+unit-cell tensor once, which the sqrt3 cell does not allow for NNN bonds (``lattice.gate_paths``).
 """
 
 from yastn import eigh, exp, ncon, tensordot
@@ -59,14 +65,13 @@ def up_triangle(b):
 
 
 def nn_gates(geo, model, ops, step):
-    """First-order list of gates exp(-step h) covering every NN bond of ``geo`` once.
+    """First-order list of gates exp(-step h) covering every NN bond of ``geo`` once (NNN bonds:
+    :func:`nnn_gates`; both: :func:`model_gates`).
 
     Infinite lattice: one triangle MPO per unit-cell site. OBC: triangle MPOs where all three
-    sites are inside, 2-site gates for the remaining bonds. NNN couplings are not handled (M5).
+    sites are inside, 2-site gates for the remaining bonds.
     """
-    if model.has_nnn:
-        raise NotImplementedError("NNN gates are added in M5")
-    hs = model.bond_hamiltonians(ops)
+    hs = {c: h for c, h in model.bond_hamiltonians(ops).items() if c in lattice.NN_CLASSES}
     gates, covered = [], set()
     for b in geo.sites():
         a, _, c = up_triangle(b)
@@ -94,6 +99,23 @@ def nn_gates(geo, model, ops, step):
                     sites = lattice.path(geo, bd) if cls == "d" else bd
                     gates.append(g._replace(sites=tuple(sites)))
     return gates
+
+
+def nnn_gates(geo, model, ops, step, variant=0):
+    """First-order list of gates exp(-step h), one per NNN bond of ``geo``, each routed along
+    ``lattice.path(geo, bond, variant)``. Raises ValueError on a cell without such a path (sqrt3)."""
+    out = []
+    for cls, h in model.bond_hamiltonians(ops).items():
+        if cls not in lattice.NNN_CLASSES:
+            continue
+        g = gate_nn_exp(step, ops.I(), h)
+        out += [g._replace(sites=lattice.path(geo, bd, variant)) for bd in lattice.bonds(geo, cls)]
+    return out
+
+
+def model_gates(geo, model, ops, step, variant=0):
+    """First-order list covering every coupled bond once: :func:`nn_gates` then :func:`nnn_gates`."""
+    return nn_gates(geo, model, ops, step) + nnn_gates(geo, model, ops, step, variant)
 
 
 def trotter2(gates_half):

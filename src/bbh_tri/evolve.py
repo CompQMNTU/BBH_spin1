@@ -1,7 +1,8 @@
-"""Imaginary-time evolution driver for the NN model (SPEC §4.1, §4.2, M3).
+"""Imaginary-time evolution driver (SPEC §4.1, §4.2, M3; NNN bonds M5).
 
-Second-order Trotter steps of triangle-MPO gates (``gates.nn_gates`` at tau/2, list + reverse),
-truncated to bond dimension D with a local metric: 'BP' (EnvBP, simple-update-like) or 'NTU'.
+Second-order Trotter steps of triangle-MPO gates and routed NNN gates (``gates.model_gates`` at
+tau/2, list + reverse), truncated to bond dimension D with a local metric: 'BP' (EnvBP,
+simple-update-like) or 'NTU'. NNN gate paths alternate between Trotter steps.
 Each tau stage runs until the CTM energy changes by less than ``tol`` between two checks
 (``check_every`` steps apart) or ``max_steps`` is reached.
 """
@@ -16,6 +17,7 @@ from . import gates, measure
 
 ENVS = {"BP": fpeps.EnvBP, "NTU": fpeps.EnvNTU}
 DEFAULT_SCHEDULE = (0.1, 0.05, 0.02, 0.01)
+N_VARIANTS = 6  # cycles through every path of each NNN class (2 for 'nnn_d', 3 for the knights)
 
 
 @dataclass
@@ -50,12 +52,15 @@ def default_chi(D):
 
 
 def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=400, check_every=20,
-           tol=1e-7, chi=None, svd_tol=1e-12, ctm_tol=1e-9, ctm_sweeps=100, log=None, deadline=None):
+           tol=1e-7, chi=None, svd_tol=1e-12, ctm_tol=1e-9, ctm_sweeps=100, log=None, deadline=None,
+           path_variant=None):
     """Evolve ``psi`` in place towards the ground state of ``model``; return an :class:`EvolveResult`.
 
     ``schedule`` lists the Trotter steps tau; the energy check uses a fresh CTM environment of
     bond dimension ``chi`` (default D^2). ``deadline`` (a ``time.time()`` value): stop after the
-    first step that ends past it, with ``timed_out`` set.
+    first step that ends past it, with ``timed_out`` set. ``path_variant``: None alternates the
+    NNN gate paths between Trotter steps (energy checks then come after whole cycles of
+    ``N_VARIANTS`` steps, ``check_every`` rounded up); an int fixes one (``gates.nnn_gates``).
     """
     chi = default_chi(D) if chi is None else chi
     metric = ENVS[env](psi)
@@ -72,17 +77,24 @@ def evolve(psi, model, ops, D, schedule=DEFAULT_SCHEDULE, env="BP", max_steps=40
         return E, by_class
 
     for tau in schedule:
-        step_gates = gates.trotter2(gates.nn_gates(psi.geometry, model, ops, tau / 2))
+        if path_variant is not None:
+            variants = [path_variant]
+        else:
+            variants = range(N_VARIANTS) if model.has_nnn else [0]
+        step_gates = [gates.trotter2(gates.model_gates(psi.geometry, model, ops, tau / 2, v)) for v in variants]
+        # alternating paths: check only after whole cycles, or each check sees another path's truncation
+        every = -(-check_every // len(step_gates)) * len(step_gates)
         E_old, err, converged, step = None, 0.0, False, 0
         while step < max_steps:
             step += 1
-            infos = fpeps.evolution_step_(metric, step_gates, opts_svd=opts_svd, **step_kwargs)
+            infos = fpeps.evolution_step_(metric, step_gates[(step - 1) % len(step_gates)], opts_svd=opts_svd,
+                                          **step_kwargs)
             normalize_(psi)
             err = max([err] + [i.truncation_error for i in infos])
             if deadline is not None and time.time() >= deadline:
                 result.timed_out = True
                 break
-            if step % check_every == 0 or step == max_steps:
+            if step % every == 0 or step == max_steps:
                 E, by_class = check()
                 result.history.append((tau, step, E))
                 if log:

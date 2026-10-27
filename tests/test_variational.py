@@ -106,6 +106,50 @@ def test_gradient_matches_fd_without_degeneracy(ad):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("cell,ad,theta_ev", [(("sqrt3", None), "unrolled", THETA), (("sqrt3", None), "fp", THETA),
+                                              (("patch", (2, 2)), "unrolled", 0.1), (("patch", (3, 3)), "unrolled", 0.1)],
+                         ids=["sqrt3-unrolled", "sqrt3-fp", "2x2-unrolled", "3x3-unrolled"])
+def test_gradient_matches_fd_with_nnn(cell, ad, theta_ev):
+    """M5: the AD gradient through the NNN classes, including the knight windows
+    (measure_nsite_exact), matches finite differences. NN-evolved D = 2 states (theta_ev; at
+    0.1 the sqrt3 state keeps a degenerate pair, so it uses pi/4); the loss needs no NNN gates,
+    so the sqrt3 cell works. fp is refused on patch cells (test_fp_refused_on_patch_cells)."""
+    ops = operators.spin1("dense")
+    psi = states.random_product_peps(lattice.geometry(*cell), ops, seed=1)
+    evolve.evolve(psi, Model(theta_ev), ops, 2, schedule=(0.1,), max_steps=20)
+    tops = var.torch_ops()
+    ch = var.Chain(var.convert(psi, tops.config), Model(0.1, J2=0.3, K2=-0.2), tops, chi=8, ad=ad)
+    ad_val, fd = directional(ch, "zero")
+    assert ad_val == pytest.approx(fd, rel=1e-5)
+
+
+def test_fp_refused_on_patch_cells():
+    ops = operators.spin1("dense")
+    psi = states.random_product_peps(lattice.geometry("patch", (3, 3)), ops, seed=1)
+    tops = var.torch_ops()
+    with pytest.raises(ValueError, match="patch cells"):
+        var.Chain(var.convert(psi, tops.config), Model(0.1), tops, chi=8, ad="fp")
+
+
+@pytest.mark.parametrize("cell", [("patch", (2, 2)), ("patch", (2, 3)), ("patch", (3, 3))], ids=str)
+def test_fp_energy_matches_unrolled_on_patch_cells(cell):
+    """fp_ctmrg round-trips its environment through TriangularLattice.to_dict; upstream that drops
+    the patch geometry (wrong energy on (3, 3), crash on (2, 2)), yastn_compat's to_dict keeps it.
+    The fp forward is then right; its gradient is not (canary test_fp_ctmrg_gradient_wrong_on_patch_cells)."""
+    ops = operators.spin1("dense")
+    psi = states.random_product_peps(lattice.geometry(*cell), ops, seed=1)
+    evolve.evolve(psi, Model(0.1), ops, 2, schedule=(0.1,), max_steps=10)
+    tops = var.torch_ops()
+    E = {}
+    for ad in ("unrolled", "fp"):
+        ch = var.Chain(var.convert(psi, tops.config), Model(0.1, J2=0.3), tops, chi=8)
+        ch.ad = ad  # past Chain's refusal of fp on patch cells: only the forward is compared here
+        with exact_svd_backward("zero"), torch.no_grad():
+            E[ad] = float(ch.loss()[0])
+    assert E["fp"] == pytest.approx(E["unrolled"], abs=1e-12)
+
+
+@pytest.mark.slow
 def test_degenerate_state_warns_by_default(psi_d3):
     with pytest.raises(DegenerateSVDWarning):
         directional(chain(psi_d3, 3), "warn")

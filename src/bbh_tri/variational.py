@@ -139,6 +139,10 @@ class Chain:
         self.torch = torch
         if ad not in ("fp", "unrolled"):
             raise ValueError(ad)
+        g = psi.geometry
+        if ad == "fp" and (getattr(g, "full_patch", False) or g.boundary != "infinite"):
+            # docs/yastn_findings.md U4d: wrong by O(1) on (2, 2), (2, 3), (3, 2), (3, 3), also for NN only
+            raise ValueError("ad='fp' gives wrong gradients on patch cells at the pinned yastn; use ad='unrolled'")
         self.model, self.ops, self.log, self.kept_degenerate, self.ad = model, ops, log, kept_degenerate, ad
         self.template = psi
         self.sites = psi.sites()

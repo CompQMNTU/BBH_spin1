@@ -65,27 +65,34 @@ def exact_sequence(v, order, gl, hs, swap_h_d=False):
         if len(g.G) == 3:
             hh, hd = (hs["d"], hs["h"]) if swap_h_d else (hs["h"], hs["d"])
             v = apply(v, sl.expm(-TAU * triangle_matrix(hs["v"], hh, hd)), g.sites)
-        else:
+        else:  # a 2-site gate, possibly routed: it acts on the path's end sites only
             s0, s1 = g.sites[0], g.sites[-1]
-            cls = {vec: c for c, vec in lattice.NN.items()}[(s1[0] - s0[0], s1[1] - s0[1])]
+            cls = {vec: c for c, vec in lattice.VECTORS.items()}[(s1[0] - s0[0], s1[1] - s0[1])]
             v = apply(v, sl.expm(-TAU * hs[cls]), (s0, s1))
     return v
 
 
-@pytest.mark.parametrize("dims", [(2, 3), (3, 3)])
-def test_gates_on_obc_patch_match_exact(dims):
+NNN_MODEL = Model(0.7, J2=0.4, K2=-0.3, J_anis=0.6)
+
+
+@pytest.mark.parametrize("dims,model,variant", [
+    ((2, 3), Model(0.7, J_anis=0.6), 0), ((3, 3), Model(0.7, J_anis=0.6), 0),
+    # 2x3 holds 'nnn_d' and 'nnn_k1', 3x2 'nnn_d' and 'nnn_k2'. Not 3x3: untruncated knight gates
+    # through 9 sites need arrays of 13-20 GB
+    *[(dims, NNN_MODEL, v) for dims in [(2, 3), (3, 2)] for v in range(3)]])
+def test_gates_on_obc_patch_match_exact(dims, model, variant):
     """One first-order sweep without truncation equals the exact gate sequence (all bonds, once).
 
     J_anis != 1 makes the bond classes distinguishable; putting the h and d terms on the wrong
-    triangle bonds gives a visibly different state.
+    triangle bonds gives a visibly different state. With J2, K2 (M5 acceptance (a)) every NNN
+    class is routed along path ``variant``.
     """
     ops = operators.spin1("dense")
     geo = lattice.geometry("obc", dims)
-    model = Model(0.7, J_anis=0.6)
     psi = states.random_product_peps(geo, ops, seed=3)
-    gl = gates.nn_gates(geo, model, ops, TAU)
+    gl = gates.model_gates(geo, model, ops, TAU, variant)
     n_bonds = sum(3 if len(g.G) == 3 else 1 for g in gl)
-    assert n_bonds == sum(len(lattice.bonds(geo, c)) for c in lattice.NN_CLASSES)
+    assert n_bonds == sum(len(lattice.bonds(geo, c)) for c in model.couplings())
 
     p = operators.basis_permutation(ops)
     v0, order = peps_vector(psi, *dims)
@@ -108,6 +115,23 @@ def test_trotter2_appends_reverse():
     assert [g.sites for g in t2] == [g.sites for g in gl] + [g.sites for g in gl[::-1]]
 
 
-def test_nnn_not_supported_yet():
-    with pytest.raises(NotImplementedError):
-        gates.nn_gates(lattice.geometry("sqrt3"), Model(0.3, J2=0.1), operators.spin1("dense"), TAU)
+def test_nnn_gates_need_a_patch_cell():
+    """On sqrt3 every NNN pair shares a tensor, so no NNN gate path exists (lattice.gate_paths)."""
+    ops = operators.spin1("dense")
+    with pytest.raises(ValueError, match="patch cell"):
+        gates.model_gates(lattice.geometry("sqrt3"), Model(0.3, J2=0.1), ops, TAU)
+    assert len(gates.model_gates(lattice.geometry("sqrt3"), Model(0.3), ops, TAU)) == 3  # NN only: unchanged
+
+
+@pytest.mark.parametrize("variant", range(6))
+def test_model_gates_cover_each_nnn_bond_once(variant):
+    """(3, 3) cell: 9 triangles, then one routed 2-site gate per NNN bond (27), each along the
+    path ``variant`` picks cyclically."""
+    geo = lattice.geometry("patch", (3, 3))
+    gl = gates.model_gates(geo, Model(0.3, J2=0.2, K2=-0.1), operators.spin1("dense"), TAU, variant)
+    tri, nnn = gl[:9], gl[9:]
+    assert all(len(g.G) == 3 for g in tri) and len(nnn) == 27 and all(len(g.G) == 2 for g in nnn)
+    expected = [lattice.gate_paths(geo, b)[variant % len(lattice.gate_paths(geo, b))]
+                for cls in lattice.NNN_CLASSES for b in lattice.bonds(geo, cls)]
+    assert [g.sites for g in nnn] == expected
+    assert gates.model_gates(geo, Model(0.3, K2=0.2), operators.spin1("dense"), TAU, variant)[9:]  # K2 alone counts

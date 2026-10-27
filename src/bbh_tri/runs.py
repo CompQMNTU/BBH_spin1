@@ -29,8 +29,10 @@ from . import io
 # ---- options ------------------------------------------------------------------------------
 
 COMMON = {"task": None, "threads": 1}
+# NNN couplings (hamiltonian.Model); evolution with them needs a patch cell (lattice.gate_paths)
+NNN = {"J2": 0.0, "K2": 0.0}
 
-VARIATIONAL = {**COMMON, "theta_over_pi": None, "D": None, "seed": None, "out": None, "sym": "dense",
+VARIATIONAL = {**COMMON, **NNN, "theta_over_pi": None, "D": None, "seed": None, "out": None, "sym": "dense",
                "cell": "sqrt3", "cell_dims": None, "chi": None, "max_steps": 200, "noise": 1e-3, "rng": 0, "max_sweeps": 100,
                "ad": "unrolled", "device": "cpu", "max_hours": None, "tol_E": 1e-8, "tol_grad": 1e-6,
                "stall_window": 5, "stall_min_evals": 25, "stall_gain": 2e-8,
@@ -43,20 +45,20 @@ AD_MODES = ("unrolled", "fp")
 # options that make the initial state; a resumed chain must have been started with the same ones
 INIT_KEYS = ("seed", "noise", "rng", "schedule", "cell", "cell_dims")
 
-VALIDATE = {**COMMON, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
+VALIDATE = {**COMMON, **NNN, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
             "corner_tol": 1e-10, "max_sweeps": 500}
 
-SEED = {**COMMON, "seed": None, "D": None, "theta_over_pi": None, "sym": "dense", "cell": "sqrt3", "cell_dims": None,
+SEED = {**COMMON, **NNN, "seed": None, "D": None, "theta_over_pi": None, "sym": "dense", "cell": "sqrt3", "cell_dims": None,
         "out": None,
         "noise": 1e-3, "rng": 0, "schedule": None}
 
-LINE_SCAN = {**COMMON, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
+LINE_SCAN = {**COMMON, **NNN, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
              "steps": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2], "max_sweeps": 60, "device": "cpu"}
 
 EXTRAPOLATE = {**COMMON, "points": None, "results": None, "chi": "max", "reference": None, "out": None}
 
-SCAN = {**COMMON, "D": None, "n_theta": 80, "env": "BP", "out": None, "workers": 8, "schedule": None,
-        "only_best": None, "from_dir": None, "save_dir": None}
+SCAN = {**COMMON, **NNN, "D": None, "n_theta": 80, "env": "BP", "out": None, "workers": 8, "schedule": None,
+        "only_best": None, "from_dir": None, "save_dir": None, "cell": "sqrt3", "cell_dims": None}
 
 REQUIRED = {"variational": ("theta_over_pi", "D", "seed", "out"), "validate": ("state", "theta_over_pi", "chi"),
             "seed": ("seed", "D", "theta_over_pi", "out"), "line_scan": ("state", "theta_over_pi", "chi"),
@@ -75,6 +77,17 @@ def options(cfg, defaults, task):
     return o
 
 
+def model_of(o):
+    """hamiltonian.Model from a task's options (theta_over_pi, J2, K2)."""
+    from .hamiltonian import Model
+    return Model(np.pi * o["theta_over_pi"], J2=float(o["J2"]), K2=float(o["K2"]))
+
+
+def model_id(o):
+    """The model part of a run's identity, as recorded in its results."""
+    return {"theta_over_pi": o["theta_over_pi"], "J2": float(o["J2"]), "K2": float(o["K2"])}
+
+
 def chi_list(chi, D):
     """Optimization chi stages: None -> [3 D^2]; an int or a list of ints; 'kD2' means k D^2."""
     if chi is None:
@@ -91,7 +104,7 @@ def chi_list(chi, D):
 # ---- seeds --------------------------------------------------------------------------------
 
 def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", schedule=None, cell_dims=None,
-               deadline=None, partial=None, partial_id=None):
+               deadline=None, partial=None, partial_id=None, J2=0.0, K2=0.0):
     """Numpy-backend PEPS at bond dimension D from a seed spec (module docstring). ``cell``,
     ``cell_dims``: ``lattice.geometry`` arguments for product-state seeds (a saved state brings its
     own geometry).
@@ -120,7 +133,7 @@ def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", sch
             src = spec[3:]
             psi = io.load_state(src, ops.config) if os.path.exists(src) else states.product_peps(geo, states.seed_vectors(src), ops)
             done = 0
-        res = evolve.evolve(psi, Model(theta), ops, D, schedule=taus[done:], deadline=deadline)
+        res = evolve.evolve(psi, Model(theta, J2=J2, K2=K2), ops, D, schedule=taus[done:], deadline=deadline)
         if res.timed_out:
             if partial is None:
                 raise ValueError("seed_state: a deadline needs a partial path to keep the evolution")
@@ -147,14 +160,14 @@ def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", sch
 def run_seed(cfg):
     o = options(cfg, SEED, "seed")
     from . import measure, operators, evolve
-    from .hamiltonian import Model
-    theta = np.pi * o["theta_over_pi"]
-    psi = seed_state(o["seed"], o["D"], theta, o["sym"], o["noise"], o["rng"], o["cell"], o["schedule"], o["cell_dims"])
+    model = model_of(o)
+    psi = seed_state(o["seed"], o["D"], model.theta, o["sym"], o["noise"], o["rng"], o["cell"], o["schedule"], o["cell_dims"],
+                     J2=model.J2, K2=model.K2)
     ops = operators.spin1(o["sym"])
-    E, _ = measure.energy(psi, measure.ctm_env(psi, evolve.default_chi(o["D"])), ops, Model(theta))
+    E, _ = measure.energy(psi, measure.ctm_env(psi, evolve.default_chi(o["D"])), ops, model)
     io.save_state(o["out"], psi)
     dims = sorted({d for s in psi.sites() for d in psi[s].get_shape()[:4]})
-    rec = {"task": "seed", "out": o["out"], "energy_chi_D2": E, "bond_dims": dims, "cell": _cell(psi),
+    rec = {"task": "seed", "out": o["out"], **model_id(o), "energy_chi_D2": E, "bond_dims": dims, "cell": _cell(psi),
            "seed_provenance": _seed_provenance(o["seed"]), "options": o, "metadata": io.metadata()}
     io.write_json(f"{o['out']}.json", rec)  # sidecar: how the state was made
     return rec
@@ -193,12 +206,11 @@ def run_variational(cfg, log=print):
     import yastn.tn.fpeps as fpeps
 
     from . import operators, variational as var
-    from .hamiltonian import Model
 
     torch.set_num_threads(int(o["threads"]))
     D, out, theta = int(o["D"]), o["out"], np.pi * o["theta_over_pi"]
     chis = chi_list(o["chi"], D)
-    model = Model(theta)
+    model = model_of(o)
     ops = var.torch_ops(o["sym"], device=o["device"])
     np_config = operators.spin1(o["sym"]).config
     deadline = time.time() + 3600 * float(o["max_hours"]) if o["max_hours"] else None
@@ -255,8 +267,8 @@ def run_variational(cfg, log=print):
         else:
             partial = f"{out}.seed.pkl"  # an evolving seed cut by the deadline; resumed by the next run
             psi = (seed_state(o["seed"], D, theta, o["sym"], o["noise"], o["rng"], o["cell"], o["schedule"], o["cell_dims"],
-                              deadline=opt_deadline, partial=partial, partial_id={**run_info["init"], "D": D,
-                                                                                  "theta_over_pi": o["theta_over_pi"], "sym": o["sym"]})
+                              deadline=opt_deadline, partial=partial, J2=model.J2, K2=model.K2,
+                              partial_id={**run_info["init"], "D": D, **model_id(o), "sym": o["sym"]})
                    if k == 0 else io.load_state(_stage_checkpoint(out, chis, k - 1), np_config))
             if psi is None:
                 log(f"max_hours reached while evolving the seed; kept in {partial}, run the same config again")
@@ -290,7 +302,7 @@ def run_variational(cfg, log=print):
         ck = _stage_checkpoint(out, chis, j)
         if os.path.exists(ck):
             history += [{**h, "chi": chis[j]} for h in torch.load(ck, weights_only=False, map_location="cpu")["history"]]
-    rec = {"task": "variational", "theta_over_pi": o["theta_over_pi"], "D": D, "sym": o["sym"], "cell": _cell(psi),
+    rec = {"task": "variational", **model_id(o), "D": D, "sym": o["sym"], "cell": _cell(psi),
            "seed": o["seed"], "seed_provenance": _seed_provenance(o["seed"]), "chi_stages": chis[:last + 1], "chi_opt": chis[last], "status": status, "stages": stages,
            "energy_opt": next((h["energy"] for h in reversed(history) if h["chi"] == chis[last]), None),
            "options": o, "metadata": meta, "init": run_info["init"], "sessions": run_info["sessions"],
@@ -356,13 +368,12 @@ def _cell(psi):
 def run_validate(cfg):
     o = options(cfg, VALIDATE, "validate")
     from . import operators, variational as var
-    from .hamiltonian import Model
     psi = io.load_state(o["state"], operators.spin1(o["sym"]).config)
     D = max(d for s in psi.sites() for d in psi[s].get_shape()[:4])
     chis = o["chi"] if isinstance(o["chi"], (list, tuple)) else [o["chi"]]
-    val = var.validate(psi, Model(np.pi * o["theta_over_pi"]), [int(c) for c in chis],
+    val = var.validate(psi, model_of(o), [int(c) for c in chis],
                        corner_tol=o["corner_tol"], max_sweeps=o["max_sweeps"])
-    rec = {"task": "validate", "state": o["state"], "theta_over_pi": o["theta_over_pi"], "sym": o["sym"], "D": D,
+    rec = {"task": "validate", "state": o["state"], **model_id(o), "sym": o["sym"], "D": D,
            **val, "order": {str(s): v for s, v in val["order"].items()}, "options": o, "metadata": io.metadata()}
     if o["out"]:
         io.write_json(o["out"], rec)
@@ -373,13 +384,12 @@ def run_line_scan(cfg):
     o = options(cfg, LINE_SCAN, "line_scan")
     import torch
     from . import operators, variational as var
-    from .hamiltonian import Model
     torch.set_num_threads(int(o["threads"]))
     psi = io.load_state(o["state"], operators.spin1(o["sym"]).config)
     ops = var.torch_ops(o["sym"], device=o["device"])
-    chain = var.Chain(var.convert(psi, ops.config), Model(np.pi * o["theta_over_pi"]), ops, int(o["chi"]),
+    chain = var.Chain(var.convert(psi, ops.config), model_of(o), ops, int(o["chi"]),
                       max_sweeps=o["max_sweeps"])
-    rec = {"task": "line_scan", "state": o["state"], "theta_over_pi": o["theta_over_pi"], "sym": o["sym"],
+    rec = {"task": "line_scan", "state": o["state"], **model_id(o), "sym": o["sym"],
            "chi": int(o["chi"]), **var.line_scan(chain, o["steps"]), "options": o, "metadata": io.metadata()}
     if o["out"]:
         io.write_json(o["out"], rec)
@@ -407,7 +417,7 @@ def _result_point(path, chi):
     D = r.get("D")
     if D is None:
         raise ValueError(f"{path} does not record D")
-    return int(D), float(E), (r.get("theta_over_pi"), r.get("sym"))
+    return int(D), float(E), (r.get("theta_over_pi"), r.get("sym"), r.get("J2", 0.0), r.get("K2", 0.0))
 
 
 def run_extrapolate(cfg):
@@ -416,8 +426,8 @@ def run_extrapolate(cfg):
     pts = [(int(D), float(E)) for D, E in (o["points"] or [])]
     files = [_result_point(p, o["chi"]) for p in (o["results"] or [])]
     models = {m for _, _, m in files}
-    if len(models) > 1:  # one ladder per (theta, symmetry): SPEC §6 keeps U1xU1 and dense apart
-        raise ValueError(f"extrapolate: result files mix (theta_over_pi, sym) = {sorted(models, key=str)}")
+    if len(models) > 1:  # one ladder per model and symmetry: SPEC §6 keeps U1xU1 and dense apart
+        raise ValueError(f"extrapolate: result files mix (theta_over_pi, sym, J2, K2) = {sorted(models, key=str)}")
     pts += [(D, E) for D, E, _ in files]
     best = {}  # lowest energy per D (several seeds or restarts at one D: the best one counts)
     for D, E in pts:
@@ -426,7 +436,7 @@ def run_extrapolate(cfg):
         raise ValueError("extrapolate: give energies at two or more D (points: [[D, E], ...] and/or results: [json, ...])")
     Ds, Es = sorted(best), [best[D] for D in sorted(best)]
     rec = {"task": "extrapolate", "points": pts, "used": list(zip(Ds, Es)),
-           "model": dict(zip(("theta_over_pi", "sym"), models.pop())) if models else None, "all": ex.extrapolate(Ds, Es),
+           "model": dict(zip(("theta_over_pi", "sym", "J2", "K2"), models.pop())) if models else None, "all": ex.extrapolate(Ds, Es),
            "subsets": {",".join(map(str, k)): v for k, v in ex.subsets(Ds, Es).items()}}
     if o["reference"] is not None:
         ref, err = (o["reference"] if isinstance(o["reference"], (list, tuple)) else (o["reference"], 0.0))
@@ -444,7 +454,8 @@ def run_scan(cfg):
     o = options(cfg, SCAN, "scan")
     from . import scan
     return scan.run_scan(D=int(o["D"]), n_theta=int(o["n_theta"]), env=o["env"], out=o["out"], workers=int(o["workers"]),
-                         schedule=o["schedule"], only_best=o["only_best"], from_dir=o["from_dir"], save_dir=o["save_dir"])
+                         schedule=o["schedule"], only_best=o["only_best"], from_dir=o["from_dir"], save_dir=o["save_dir"],
+                         J2=float(o["J2"]), K2=float(o["K2"]), cell=o["cell"], cell_dims=o["cell_dims"])
 
 
 TASKS = {"variational": run_variational, "validate": run_validate, "seed": run_seed, "line_scan": run_line_scan,
