@@ -327,3 +327,23 @@ def test_gap_safe_truncation_raises_when_chi_is_below_the_leading_multiplet():
     with pytest.raises(ValueError, match="increase chi"):
         gap_safe_truncation(0.0, 1, eps_multiplet=1e-6)(S)
     assert int(np.sum(gap_safe_truncation(0.0, 2, eps_multiplet=1e-6)(S).to_numpy())) == 2
+
+
+@pytest.mark.ad
+def test_gap_safe_truncation_runs_under_torch_func_vjp():
+    """fp_ctmrg's backward evaluates the CTM step under torch.func.vjp, whose wrapped tensors have
+    no storage for .numpy(); the mask must still read the spectrum there."""
+    torch = pytest.importorskip("torch")
+    from bbh_tri.yastn_compat import gap_safe_truncation
+    cfg = yastn.make_config(backend="torch", default_dtype="float64")
+    S = yastn.Tensor(config=cfg, s=(1, -1), isdiag=True)
+    S.set_block(Ds=6, val=[1.0, 0.3, 1e-3, 1e-8 + 5e-11, 1e-8, 1e-9])
+    kept = []
+
+    def f(x):
+        T = S.copy()
+        T._data = x
+        kept.append(int(gap_safe_truncation(0.0, 4)(T)._data.sum().item()))
+        return x.sum()
+    torch.func.vjp(f, S._data.clone())
+    assert kept == [3]  # the pair at 1e-8 straddles the plain cut at 4: dropped whole

@@ -117,6 +117,30 @@ def test_unrolled_gradient_matches_fd_with_kept_degenerate_pair(psi_d3):
     assert ad_val == pytest.approx(fd, rel=1e-6)
 
 
+@pytest.mark.slow
+def test_fp_chain_cuts_with_its_gap_safe_mask_in_the_backward(psi_d3):
+    """ad='fp' hands Chain's gap-safe mask to fp_ctmrg, which applies it in the backward
+    fixed-point iteration too (issue #22: a plain cut there split a near-degenerate pair)."""
+    ch = chain(psi_d3, 3, ad="fp")
+    mask, phase, calls = ch.truncation_f, ["forward"], []
+
+    def spy(S):
+        calls.append(phase[0])
+        return mask(S)
+    ch.truncation_f = spy
+    with exact_svd_backward("zero"), warnings.catch_warnings():
+        warnings.simplefilter("error", DegenerateSVDWarning)
+        E, _ = ch.loss()
+        phase[0] = "backward"
+        E.backward()
+    assert "forward" in calls and "backward" in calls
+    ch.truncation_f = mask
+    for p in ch.params:
+        p.grad = None
+    ad_val, fd = directional(ch, "zero")
+    assert ad_val == pytest.approx(fd, rel=1e-5)
+
+
 def test_fd_check_catches_component_orthogonal_to_the_gradient():
     """Codex counterexample (PR #8): L = eps R[0,0] + R[1,2] + R[2,1] of the reconstruction of
     A = diag(1, 1e-4, 1e-4). The zero mode keeps only eps along A[0,0] and drops the O(1)
