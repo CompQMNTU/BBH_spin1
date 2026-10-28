@@ -38,6 +38,9 @@ through every sweep: memory no longer grows with the sweeps (theta = 0, dense D 
 8.4 GB on a GPU, against ~300 GB unrolled on CPU). ``--max-sweeps`` then caps the forward CTM sweeps
 and the terms of the backward fixed-point series. A checkpoint resumes only with its own --ad; to
 switch, start another --out with --seed OUT.pt (docs/ad_workflow.md §3).
+``--J2``/``--K2`` add NNN couplings. A ``bp`` seed then evolves with NNN gates, which need a patch
+cell (``--cell patch --cell-dims 3 3``; sqrt3 has no admissible NNN gate path). The AD chain itself
+works on any cell, sqrt3 included.
 ``--max-hours`` stops cleanly before a batch-system time limit (status 'time', no validation);
 rerun the same command to resume.
 """
@@ -78,13 +81,18 @@ def main():
     p.add_argument("--max-hours", type=float, default=None, help="stop cleanly after this wall time")
     p.add_argument("--stall-window", type=int, default=5, help="steps in the stall test (0 disables it)")
     p.add_argument("--no-validate", action="store_true")
+    p.add_argument("--J2", type=float, default=0.0, help="NNN S.S coupling")
+    p.add_argument("--K2", type=float, default=0.0, help="NNN (S.S)^2 coupling")
+    p.add_argument("--cell", default="sqrt3", help="sqrt3 | patch (with --cell-dims), for product and bp seeds")
+    p.add_argument("--cell-dims", type=int, nargs=2, default=None, help="patch dims, e.g. 2 2 or 3 3")
     a = p.parse_args()
 
     from bbh_tri.runs import run_variational
     chi = None if a.chi is None else [c if c.upper().endswith("D2") else int(c) for c in a.chi]
     cfg = {"theta_over_pi": a.theta_over_pi, "D": a.D, "seed": a.seed, "sym": a.sym, "out": a.out, "chi": chi,
            "max_steps": a.max_steps, "noise": a.noise, "rng": a.rng, "threads": a.threads, "max_sweeps": a.max_sweeps,
-           "ad": a.ad, "device": a.device, "max_hours": a.max_hours, "stall_window": a.stall_window, "validate": not a.no_validate}
+           "ad": a.ad, "device": a.device, "max_hours": a.max_hours, "stall_window": a.stall_window, "validate": not a.no_validate,
+           "J2": a.J2, "K2": a.K2, "cell": a.cell, "cell_dims": a.cell_dims}
     try:
         rec = run_variational(cfg, log=lambda s: print(s, flush=True))
     except ValueError as e:

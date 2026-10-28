@@ -36,11 +36,16 @@ def main():
     p.add_argument("--only-best", default=None, help="scan file; run only its best start per theta")
     p.add_argument("--from-dir", default=None, help="start from states saved by --save-dir")
     p.add_argument("--save-dir", default=None)
+    p.add_argument("--J2", type=float, default=0.0, help="NNN S.S coupling (needs a patch --cell)")
+    p.add_argument("--K2", type=float, default=0.0, help="NNN (S.S)^2 coupling (needs a patch --cell)")
+    p.add_argument("--cell", default="sqrt3", help="sqrt3 | patch (with --cell-dims)")
+    p.add_argument("--cell-dims", type=int, nargs=2, default=None, help="patch dims, e.g. 3 3 or 6 6")
     a = p.parse_args()
     from bbh_tri.scan import run_scan
     try:
         run_scan(a.D, a.out, n_theta=a.n_theta, env=a.env, workers=a.workers, schedule=a.schedule,
-                 only_best=a.only_best, from_dir=a.from_dir, save_dir=a.save_dir)
+                 only_best=a.only_best, from_dir=a.from_dir, save_dir=a.save_dir, J2=a.J2, K2=a.K2,
+                 cell=a.cell, cell_dims=a.cell_dims)
     except ValueError as e:
         raise SystemExit(str(e))
 

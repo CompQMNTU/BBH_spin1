@@ -7,6 +7,8 @@ A vector (dr, dc) = dc*a1 + dr*a2 has |v|^2 = dc^2 + dr^2 + dc*dr.
 Bond classes (one bond of each class per site): NN 'h', 'v', 'd'; NNN (|r| = sqrt 3) 'nnn_d',
 'nnn_k1', 'nnn_k2' (k = knight move). Third neighbors (|r| = 2) are listed for future use.
 
+Gates are routed along square-NN paths (:func:`path`) that visit each unit-cell tensor once.
+
 Bonds are built here, not taken from ``geometry.bonds()``: that list breaks on OBC triangular
 patches (``Bond(None, ...)``) and has no NNN classes. ED and PEPS must both use :func:`bonds`.
 """
@@ -58,6 +60,11 @@ def geometry(kind="sqrt3", dims=None):
     raise ValueError(f"unknown geometry kind {kind!r}")
 
 
+def same_geometry(a, b):
+    """Whether two TriangularLattice geometries are the same cell (dims, boundary, full_patch)."""
+    return (type(a), tuple(a.dims), a.boundary, a.full_patch) == (type(b), tuple(b.dims), b.boundary, b.full_patch)
+
+
 def is_finite(geo):
     return geo.boundary == "obc"
 
@@ -104,9 +111,20 @@ def paths(geo, bond):
     return out
 
 
+def gate_paths(geo, bond):
+    """The paths of :func:`paths` a gate can be routed along: those that visit every unit-cell
+    tensor at most once. ``evolution_step_`` applies a gate on a path through one tensor twice
+    without an error, and the result is wrong (docs/yastn_findings.md). On the sqrt3 cell every
+    NNN pair shares a tensor, so NNN gates need a patch cell, e.g. (3, 3) or (6, 6); on (2, 2)
+    one path per knight class remains."""
+    return [p for p in paths(geo, bond) if len({geo.site2index(s) for s in p}) == len(p)]
+
+
 def path(geo, bond, variant=0):
-    """One path of :func:`paths`, chosen cyclically by ``variant``."""
-    ps = paths(geo, bond)
+    """One path of :func:`gate_paths`, chosen cyclically by ``variant``."""
+    ps = gate_paths(geo, bond)
     if not ps:
-        raise ValueError(f"no square-NN path for {bond} inside the lattice")
+        raise ValueError(f"no square-NN path for {bond} inside the lattice that visits each unit-cell tensor "
+                         "once; NNN gates need a patch cell such as geometry('patch', (3, 3)) (sqrt3: every "
+                         "NNN pair shares a tensor)")
     return ps[variant % len(ps)]

@@ -42,14 +42,26 @@ Regression tests (M0): `tests/test_routing.py` (U1), `tests/test_measure.py` (U2
 - Every bond along the path is truncated (truncation error ~1e-15 in this test).
 - On the |+1,0,−1⟩ product state, the maximum deviation from the exact 2-site result was 6e-17. The middle site stayed in |0⟩ (weight off |0⟩ ~1e-17).
 
+## U1b — a gate path through one unit-cell tensor twice (M5, 2026-10-27)
+
+On an infinite lattice a path's sites map to unit-cell tensors (`geometry.site2index`). On the √3×√3 cell every NNN pair lies on one sublattice, so every NNN path starts and ends on the same tensor (e.g. 'nnn_d' (0,0)→(0,1)→(1,1): tensors 0, 1, 0; knight paths 0, 1, 2, 0). `evolution_step_` applies such a gate without an error, though the result cannot be the gate's action. Paths that revisit a tensor also occur on (2, 2): two of the three knight paths per class. `lattice.gate_paths` keeps only paths through distinct tensors, and `lattice.path` raises if none is left. Admissible NNN paths ('nnn_d', 'nnn_k1', 'nnn_k2'): √3×√3 0, 0, 0; (2, 2) 2, 1, 1; (3, 3) and (6, 6) 2, 3, 3. NNN evolution therefore needs a patch cell; measurement and AD work on any cell. Canary: `test_path_gate_through_one_tensor_twice_runs_silently`.
+
 ## U2 — diagonal measurement (resolved)
 
 - `measure_nn` raises; `measure_rdm_diag` crashes (dense); `measure_line` raises `Sites should form a horizontal or vertical line.`
 - `measure_2x2`, `measure_nsite_exact` and a manual `rdm2x2_anti_diagonal` contraction agree: 0.5547073039441632 / …628 / …629.
 
-## U3 — knight-move windows (partly)
+## U3 — knight-move windows (measured, M5, 2026-10-27)
 
-`measure_nsite_exact` runs on a 2×3 window at small D. Cost at the target D, χ is not yet measured.
+`measure_nsite_exact` runs on a 2×3 / 3×2 window; AD through it matches FD (`test_gradient_matches_fd_with_nnn`, √3×√3, (2, 2), (3, 3)). Cost at θ = π/4, J₂ = 0.2, K₂ = 0.1, √3×√3, dense, χ = 3D², one thread (EnvBP states; `scripts/m5_profile_knight.py`). Times are per class, i.e. 3 bonds:
+
+| D, χ | CTM (numpy) | h, v, d, nnn_d | nnn_k1, nnn_k2 | fp AD fwd + bwd, NN only | with NNN | peak memory, NN → NNN AD |
+|---|---|---|---|---|---|---|
+| 3, 27 | 0.6 s | ≤ 0.01 s | 0.40 s each | 2.5 + 0.7 s | 4.5 + 1.8 s | 0.4 → 2.3 GB |
+| 4, 48 | 2.2 s | ≤ 0.07 s | 9.3 s each | 4.9 + 3.3 s | 34.4 + 26.1 s | 2.4 → 36.6 GB |
+| 5, 75 | 7.2 s | ≤ 0.35 s | 61, 73 s | — | — | — |
+
+The knight classes dominate: at D = 4 they make an AD evaluation 7× slower and 15× larger in memory, and at D = 5 a numpy measurement of them takes ~20× the CTM. The dense bond energy J S·S + K (S·S)² is evaluated as 12 separate window contractions (`measure.bbh_terms`: 3 for S·S, 9 for (S·S)²). One 2-site rdm per window (a single contraction, then traced with the 9×9 operator) would cut this ~12×; not implemented. Until then, NNN AD with knight terms is practical up to D ≈ 4 (CPU, ~37 GB at χ = 48).
 
 ## U4 — `fp_ctmrg` on TriangularLattice (resolved with a patch)
 
@@ -103,12 +115,23 @@ Setup: θ = π/4, √3×√3, dense, D = 3 EnvBP states, χ = 18, loss = E/site 
 
 At the pinned commit `fp_ctmrg` forwards every key of `ctm_opts_fwd` besides `method`, `max_sweeps`, `opts_svd` and `corner_tol` to `EnvCTM.ctmrg_`, and copies `ctm_opts_fwd` (updated by `ctm_opts_fp`) into the options of the gauge-fixing CTM step and of the backward fixed-point iteration (`FixedPoint.fixed_point_iter`, `env.update_`). `proj_corners` turns `truncation_f` into `opts_svd['mask_f']`, so one mask sets the cut in the forward, the gauge fixing and the backward. Only the multi-GPU forward (`fwd_devices` with more than one device, `iterate_D_`) passes `truncation_f=None`. The backward runs the CTM step under `torch.func.vjp`, whose wrapped tensors have no storage: `.numpy()` raises `RuntimeError: Cannot access data pointer of Tensor that doesn't have storage`, while `.tolist()` and `.item()` work, so a mask must read the spectrum with `tolist` (`gap_safe_truncation` does). Canary: `test_yastn_canaries.py::test_fp_ctmrg_passes_truncation_f_to_forward_and_backward` (a keep-5 mask at `D_total` = 8 gives 5×5 corners and is called again in the backward). `Chain(ad="fp")` passes its `gap_safe_truncation` mask this way (issue #22).
 
+## U4d — `fp_ctmrg` gradient wrong on patch cells (M5, 2026-10-27)
+
+Even with the geometry kept (Serialization), the implicit fp gradient misses central finite differences by O(1) on every `full_patch` cell tried, also for the NN model: D = 2 EnvBP states, χ = 8, directional derivative AD / FD: (2, 2) −0.0201 / −0.2380, (2, 3) +0.0188 / +0.3859, (3, 2) −0.747 / +0.219, (3, 3) −0.451 / +0.0904 (θ = 0.1 evolution; similar at π/4 and with J₂, K₂). Unrolled AD matches FD to 1e-7 on the same states, and fp matches on √3×√3 (U4, and the θ = 0 D = 4, 5 checks in `docs/ad_workflow.md` §3). Presumably the gauge fixing or the fixed-point iteration assumes the √3×√3 site pattern; not traced. `variational.Chain` refuses `ad="fp"` on patch and OBC cells. Canary: `test_fp_ctmrg_gradient_wrong_on_patch_cells` (slow).
+
 ## CTM truncation at D = 4: cut through a multiplet (M4, 2026-10-18)
 
 Two AD chains at θ = π/4, D = 4, χ = 32 stopped after 4 failed steps each, both at line-search trial points (reproduced from the checkpoints):
 - **U1×U1:** CTM never converged; the corner spectra alternated with max_dsv ≈ 0.028 for 500 sweeps (`NoFixedPointError`). The same state in dense cycles too (2.5e-2 / 1e-4 on alternate sweeps), so it is not a symmetry artifact. χ = 48 or 64, or `tol` = 1e-6, converge in 11 sweeps (E changes by 7e-6). The χ = 32 cut falls inside a multiplet that spans several symmetry sectors, and the CTM alternates between keeping one part or the other.
 - **Dense:** the gradient warned: singular values near the `tol` = 1e-8 cut (≈1e-8 σ_max) are closer than 1e-10 σ_max, so the cut kept one member of a near-degenerate pair and discarded the other.
 - **Fix:** `yastn_compat.gap_safe_truncation(tol, chi, eps_multiplet)`, passed as `EnvCTM.iterate_(truncation_f=...)`. The kept set is a prefix of the globally sorted spectrum; the cut moves down until, at the same position, (a) the relative gap between the last kept and first discarded value exceeds eps_multiplet (whole multiplets across sectors) and (b) in every block the last kept and first discarded value differ by more than 10 × the backward's degeneracy threshold × block max. (A first version applied (b) as a per-block backoff after (a), which could split a cross-sector multiplet again: Codex, PR #10; now a test.) On the trial points: CTM converges in 11 sweeps for eps_multiplet = 1e-6…1e-3 (29–31 states kept), and the dense gradient no longer warns (E unchanged to 1e-14). `Chain` (default `eps_multiplet` = 1e-6) and `validate` use it; `validate` now reports `ctm_converged` per χ. Regression: `tests/test_yastn_compat.py::test_multiplet_safe_cut_stops_ctm_cycle` (fixture `tests/data/d4_pi4_ctm_cycle.npz`).
+
+## Full update (EnvCTM metric) with 3-site MPO gates (M4/M5, 2026-10-27)
+
+Full update does not run with our gates at the pinned commit. Every gate `gates.model_gates` builds is a 3-site MPO (NN triangles; NNN gates are two tensors on a 3-site path, which `apply_gate_` fills with an identity middle tensor). Tried on √3×√3 and the (3, 3) patch, θ = 0 (J₂ = 0 and 0.1), BP-evolved D = 2, 3 states, χ = D²:
+- **`method="mpo"` (default):** `EnvCTM.bond_metric` raises `YastnError` ("different number of hard-fused legs") on the first gate. The whole gate is applied first, and while the first path bond is truncated the second still carries the fused (D, 9) leg, which the CTM tensors do not match. (EnvNTU and EnvBP build their metric from the state only and do not hit this.) Canary: `test_ctm_full_update_of_mpo_gate_raises`.
+- **`method="NN"`:** `truncate_` always calls `env.post_truncation_`, i.e. `EnvCTM.update_bond_`, which reads `env.opts_svd` unless `opts_post_truncation={"opts_svd": ...}` is passed; `EnvCTM` never sets it (`AttributeError`; canary `test_ctm_full_update_split_gates_need_post_truncation_opts`). `split_gate_2site` only splits gates with ≥ 3 tensors (our NNN gates need an explicit `fill_eye_in_gate` first), and it SVDs the middle tensor across (in, left) | (out, right), so between the two pieces the middle site's physical leg carries the MPO bond: 3 → 27 (`test_split_gate_2site_enlarges_the_physical_leg`). With both workarounds the gates run at D = 2, but at D = 3 on (3, 3) (J₂ = 0.1, χ = 9) the 9th gate, an NN triangle, fails: the EAT initialization finds no metric eigenvalue above the cutoff (`ValueError: zero-size array`), and `initialization="SVD"` gives `ZeroDivisionError` (zero metric norm of R₀R₁). Not traced further. Canary: `test_ctm_full_update_of_split_gates_fails_at_d3` (slow).
+- **Consequence:** no full-update timings. A fix needs a 2-site decomposition of the triangle and NNN gates that keeps the physical leg at 3, or an upstream fix of the metric for enlarged neighbouring bonds. Reference costs on (3, 3) with NNN (4 threads): BP Trotter step 0.9 s (D = 3) / 1.8 s (D = 4); CTM from scratch at χ = D² 1.8 s / 21.8 s (~0.66 s per sweep at D = 4); energy incl. knight windows 1.5 s / 13.4 s. A full-update step needs CTM sweeps plus ~160 metric truncations, so at D = 4 it would cost at least several seconds.
 
 ## NTU: default initialization keeps metric-null junk on path gates (M3 follow-up, 2026-10-18)
 
@@ -120,6 +143,7 @@ Two AD chains at θ = π/4, D = 4, χ = 32 stopped after 4 failed steps each, bo
 ## Serialization
 
 - `TriangularLattice.to_dict()` (`_geometry.py:409`) stores only `pattern`; `Peps.from_dict` calls `TriangularLattice(**d['geometry'])`, which ignores it. A `full_patch=True` (9-site) state reloads as the 3-site √3×√3 cell, an OBC 2×3 `full_patch=True` state (6 sites) as infinite 3×3, silently. (OBC needs `full_patch=True` anyway; without it `dims` is ignored, see the API table.) Workaround: `bbh_tri.yastn_compat.peps_to_dict(psi)` stores `dims`, `boundary`, `full_patch` instead; `Peps.from_dict` then rebuilds the right geometry (tested for default, full_patch and OBC). The default √3×√3 cell round-trips either way.
+- The same loss hit `fp_ctmrg` (M5, 2026-10-27): it round-trips the environment through `EnvCTM.to_dict`/`from_dict` and `Lattice.from_dict`, so on a patch cell its environment had the default geometry. Energies were wrong without an error on (3, 3) (−0.53873 vs −0.53931 from `iterate_`) and the first rdm raised "Bond dimensions do not match" on (2, 2), (2, 3), (6, 6). Importing `bbh_tri.yastn_compat` now replaces `TriangularLattice.to_dict` by one that adds `dims`, `boundary`, `full_patch`; after that the fp and unrolled energies agree to roundoff on all of these cells (`test_fp_energy_matches_unrolled_on_patch_cells`, `test_triangular_to_dict_round_trips_geometry`). The canary `test_triangular_to_dict_loses_geometry` calls the saved upstream method.
 - `TriangularLattice(full_patch=True).bonds()` (no direction) raises `TypeError` (tuple + list, `_geometry.py:407`). Iterate `bonds('h')`, `bonds('v')`, `bonds('d')` separately.
 
 ## Symmetric configs
