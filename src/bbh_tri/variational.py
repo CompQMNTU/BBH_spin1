@@ -73,14 +73,22 @@ def energy(psi, env, ops, model):
     return total.real if hasattr(total, "real") else total, e
 
 
-def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise=1e-10, rtol=1e-3):
-    """Compare AD with central differences of ``loss()`` (a float) along the normalized gradient and
+def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise=1e-10, rtol=1e-3, n_shrink=2):
+    """Compare AD with central differences of ``loss()`` along the normalized gradient and
     ``n_random`` random unit directions. Returns (ok, [(AD, FD) per direction], tolerance).
 
     The random directions are independent of the gradient: a component the gradient lacks entirely
     (e.g. dropped by the zero mode) is invisible along the gradient itself. Tolerance
     rtol * |g| + energy_noise / step, the second term being the FD error from an energy converged to
-    ~energy_noise. Parameters are restored afterwards. Complex parameters: AD derivative Re<g, v>.
+    ~energy_noise (the returned tolerance is the one at the full step). Parameters are restored
+    afterwards. Complex parameters: AD derivative Re<g, v>.
+
+    ``loss()`` returns a float, or (float, cut signature) for a loss that is only piecewise smooth
+    (the gap-safe CTM cut: :func:`cut_signature`). AD differentiates with the cut held fixed, so a
+    difference across a change of the cut measures the jump, not the gradient (issue #26). Then
+    each direction needs both stencil points on the cut of ``params``; otherwise the step shrinks by
+    4, at most ``n_shrink`` times, and a direction still straddling a cut change is inconclusive
+    (FD None). ok: no conclusive direction fails and at least one is conclusive.
     """
     import torch
     gnorm = torch.sqrt(sum((g.abs() ** 2).sum() for g in grads))
@@ -93,22 +101,43 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
         n = torch.sqrt(sum((x.abs() ** 2).sum() for x in v))
         dirs.append([x / n for x in v])
     x0 = [p.detach().clone() for p in params]
-    checks = []
+
+    def at(step, v):
+        for p, q, x in zip(params, x0, v):
+            p.copy_(q + step * x)
+        out = loss()
+        return out if isinstance(out, tuple) else (out, None)
+
+    checks, ok = [], True
     with torch.no_grad():
         try:
+            sig0 = None  # cut at params, evaluated once the loss turns out to return signatures
             for v in dirs:
-                vals = []
-                for sgn in (1, -1):
-                    for p, q, x in zip(params, x0, v):
-                        p.copy_(q + sgn * eps * x)
-                    vals.append(loss())
                 ad = sum((g.conj() * x).sum() for g, x in zip(grads, v)).real.item()
-                checks.append((ad, (vals[0] - vals[1]) / (2 * eps)))
+                fd, h = None, eps
+                for _ in range(n_shrink + 1):
+                    (fp, sp), (fm, sm) = at(h, v), at(-h, v)
+                    if sp is not None and sig0 is None:
+                        sig0 = at(0.0, v)[1]
+                    if sp == sig0 and sm == sig0:  # also a plain float loss (all None)
+                        fd = (fp - fm) / (2 * h)
+                        break
+                    h /= 4
+                checks.append((ad, fd))
+                if fd is not None and abs(ad - fd) > rtol * gnorm.item() + energy_noise / h:
+                    ok = False
         finally:  # also when a trial-point loss raises
             for p, q in zip(params, x0):
                 p.copy_(q)
-    tol = rtol * gnorm.item() + energy_noise / eps
-    return all(abs(a - f) <= tol for a, f in checks), checks, tol
+    conclusive = [c for c in checks if c[1] is not None]
+    return ok and (bool(conclusive) or not checks), checks, rtol * gnorm.item() + energy_noise / eps
+
+
+def cut_signature(env):
+    """Bond dimensions (charges and sizes) of every CTM corner: the kept sets of the last projectors.
+    The gap-safe cut keeps a prefix of the sorted spectrum, so equal signatures mean the same cut."""
+    return tuple((s, d, tuple((leg.t, leg.D) for leg in getattr(env[s], d).get_legs()))
+                 for s in env.sites() for d in ("tl", "tr", "bl", "br"))
 
 
 class Chain:
@@ -218,6 +247,7 @@ class Chain:
             if not info.converged:
                 raise NoFixedPointError(code=1, message=f"CTM not converged: {info}")
         self.n_evals += 1
+        self.last_env = env
         return energy(psi, env, self.ops, self.model)
 
     def _closure(self):
@@ -278,7 +308,7 @@ class Chain:
         evaluation (which :meth:`step` leaves at the current point) and tolerance ``fd_rtol``."""
         def loss():
             with exact_svd_backward(self.kept_degenerate), self.torch.no_grad():
-                return self.loss()[0].item()
+                return self.loss()[0].item(), cut_signature(self.last_env)
         return fd_check(loss, self.params, self._last[3], n_random=n_random, seed=seed, rtol=self.fd_rtol)
 
     def perturb(self, noise=1e-3, seed=None):
