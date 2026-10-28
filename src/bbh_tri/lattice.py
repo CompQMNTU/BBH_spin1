@@ -60,6 +60,11 @@ def geometry(kind="sqrt3", dims=None):
     raise ValueError(f"unknown geometry kind {kind!r}")
 
 
+def same_geometry(a, b):
+    """Whether two TriangularLattice geometries are the same cell (dims, boundary, full_patch)."""
+    return (type(a), tuple(a.dims), a.boundary, a.full_patch) == (type(b), tuple(b.dims), b.boundary, b.full_patch)
+
+
 def is_finite(geo):
     return geo.boundary == "obc"
 

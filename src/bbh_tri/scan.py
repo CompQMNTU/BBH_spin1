@@ -7,7 +7,8 @@ For every theta and initial state (FM, FQ, AFQ, SU3 seeds, random product) evolv
 dimension D and append one JSON line per run to the output file. Runs already in the file are
 skipped, so a scan can be resumed. Warm start: ``only_best`` keeps, per theta, only the
 lowest-energy start of an earlier scan (:func:`best_per_theta`); ``save_dir`` pickles the final
-states; ``from_dir`` starts from such saved states instead of the product states.
+states; ``from_dir`` starts from such saved states instead of the product states (they must have
+the requested cell).
 """
 
 import json
@@ -61,6 +62,9 @@ def run_one(theta_k, n_theta, D, init, env, schedule, from_dir, save_dir, J2=0.0
     geo = lattice.geometry(cell, cell_dims)
     if from_dir:
         psi = io.load_state(state_file(from_dir, theta_k, init), ops.config)
+        if not lattice.same_geometry(psi.geometry, geo):  # records and resume checks report the requested cell
+            raise ValueError(f"warm-start state {state_file(from_dir, theta_k, init)} has another cell than "
+                             f"cell={cell!r}, cell_dims={cell_dims}; pass the cell it was made on")
     elif init == "random":
         psi = states.random_product_peps(geo, ops, seed=theta_k)
     else:

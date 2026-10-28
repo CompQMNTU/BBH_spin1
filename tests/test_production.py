@@ -113,6 +113,18 @@ def test_scan_records_without_nnn_fields_read_as_nn_sqrt3():
     assert scan.run_params({**old, "J2": 0.1})["J2"] == 0.1
 
 
+@pytest.mark.parametrize("cell, cell_dims", [("sqrt3", None), ("patch", (2, 2))])
+def test_scan_warm_start_rejects_a_state_of_another_cell(tmp_path, cell, cell_dims):
+    """A saved (3, 3) state keeps its geometry on load; the scan record would report the requested cell."""
+    ops = operators.spin1("dense")
+    io.save_state(scan.state_file(str(tmp_path), 0, "FM"), states.product_peps(lattice.geometry("patch", (3, 3)),
+                                                                              states.seed_vectors("FM"), ops))
+    with pytest.raises(ValueError, match="another cell"):
+        scan.run_one(0, 80, 1, "FM", "BP", (0.1,), str(tmp_path), None, cell=cell, cell_dims=cell_dims)
+    r = scan.run_one(0, 80, 1, "FM", "BP", (0.1,), str(tmp_path), None, cell="patch", cell_dims=(3, 3))
+    assert r["cell_dims"] == [3, 3]
+
+
 def test_options_reject_unknown_and_missing_keys():
     with pytest.raises(ValueError, match="unknown option"):
         runs.options({"theta_over_pi": 0.25, "D": 2, "seed": "bp", "out": "x", "max_step": 3}, runs.VARIATIONAL, "variational")
