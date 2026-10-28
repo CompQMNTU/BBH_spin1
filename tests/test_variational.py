@@ -12,6 +12,7 @@ the tensors). There:
 At D = 2 (no degeneracy) both AD modes agree with finite differences.
 """
 
+import math
 import os
 import subprocess
 import sys
@@ -254,6 +255,17 @@ def test_fd_check_direction_straddling_the_cut_at_every_step_is_inconclusive():
     g = torch.tensor([0.0, 1.0, 0.0, 0.0], dtype=torch.float64)
     ok, checks, _ = var.fd_check(loss, [x], [g], n_random=0)  # direction x[1]: x[0] fixed, conclusive
     assert ok and checks[0][1] == pytest.approx(1.0, abs=1e-8)
+
+
+def test_fd_check_fails_a_nan_difference():
+    """A stencil loss that returns NaN without raising gives FD NaN: a failure, not a pass
+    (NaN compares false, so the gate must test acceptance, not rejection)."""
+    x = torch.ones(4, dtype=torch.float64)
+    nan_side = lambda: float("nan") if x[0] > 1 else float((x ** 2).sum() / 2)
+    ok, checks, _ = var.fd_check(nan_side, [x], [x.clone()], n_random=0)
+    assert not ok and math.isnan(checks[0][1])
+    ok, _, _ = var.fd_check(lambda: (nan_side(), 0), [x], [x.clone()], n_random=0)  # same cut: conclusive NaN
+    assert not ok
 
 
 def test_chain_check_gradient_compares_cuts():

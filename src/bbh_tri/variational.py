@@ -124,7 +124,7 @@ def fd_check(loss, params, grads, n_random=2, seed=0, rel_eps=1e-4, energy_noise
                         break
                     h /= 4
                 checks.append((ad, fd))
-                if fd is not None and abs(ad - fd) > rtol * gnorm.item() + energy_noise / h:
+                if fd is not None and not abs(ad - fd) <= rtol * gnorm.item() + energy_noise / h:  # NaN fails
                     ok = False
         finally:  # also when a trial-point loss raises
             for p, q in zip(params, x0):
