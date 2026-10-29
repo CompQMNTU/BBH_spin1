@@ -12,6 +12,7 @@ the tensors). There:
 At D = 2 (no degeneracy) both AD modes agree with finite differences.
 """
 
+import math
 import os
 import subprocess
 import sys
@@ -219,6 +220,69 @@ def test_fd_check_zero_gradient_and_failing_loss():
     with pytest.raises(RuntimeError):
         var.fd_check(boom, [x], [torch.ones(2, dtype=torch.float64)])
     assert torch.equal(x, torch.tensor([1.0, 2.0], dtype=torch.float64))
+
+
+def _jump_loss(x, delta, J=1e-5):
+    """x^2/2 plus a jump J where x[0] crosses x0[0] + delta; signature: which side of the cut."""
+    c = 1.0 + delta
+    return lambda: (float((x ** 2).sum() / 2 + J * (x[0] > c)), bool(x[0] > c))
+
+
+def test_fd_check_skips_a_cut_change_inside_the_stencil():
+    """Issue #26: a loss jump inside the stencil (gap-safe cut changing) is a fake slope J / 2 eps.
+    Along g = x0 = (1, 1, 1, 1): eps = 2e-4 moves x[0] by 1e-4, past the cut 5e-5 away; at eps / 4
+    it does not, and the difference is the true derivative."""
+    x = torch.ones(4, dtype=torch.float64)
+    g = [x.clone()]
+    float_loss = lambda: _jump_loss(x, 5e-5)()[0]
+    ok, checks, _ = var.fd_check(float_loss, [x], g, n_random=0)
+    assert not ok and checks[0][1] == pytest.approx(2 + 1e-5 / 4e-4)  # without signatures: the old failure
+    ok, checks, _ = var.fd_check(_jump_loss(x, 5e-5), [x], g, n_random=0)
+    assert ok and checks[0][1] == pytest.approx(2.0, abs=1e-8)
+    ok, _, _ = var.fd_check(_jump_loss(x, 5e-5), [x], [2 * x], n_random=0)  # a wrong gradient still fails
+    assert not ok
+    assert torch.equal(x, torch.ones(4, dtype=torch.float64))
+
+
+def test_fd_check_direction_straddling_the_cut_at_every_step_is_inconclusive():
+    """A cut 1e-9 away is crossed at eps / 16 too: FD None, and with nothing conclusive the check
+    fails. A direction that never meets the cut (here along x[1]) stays conclusive and decides."""
+    x = torch.ones(4, dtype=torch.float64)
+    ok, checks, _ = var.fd_check(_jump_loss(x, 1e-9), [x], [x.clone()], n_random=0)
+    assert not ok and checks == [(pytest.approx(2.0), None)]
+    c = 1.0 + 1e-9
+    loss = lambda: (float(x[1] ** 2 / 2 + 1e-5 * (x[0] > c)), bool(x[0] > c))
+    g = torch.tensor([0.0, 1.0, 0.0, 0.0], dtype=torch.float64)
+    ok, checks, _ = var.fd_check(loss, [x], [g], n_random=0)  # direction x[1]: x[0] fixed, conclusive
+    assert ok and checks[0][1] == pytest.approx(1.0, abs=1e-8)
+
+
+def test_fd_check_fails_a_nan_difference():
+    """A stencil loss that returns NaN without raising gives FD NaN: a failure, not a pass
+    (NaN compares false, so the gate must test acceptance, not rejection)."""
+    x = torch.ones(4, dtype=torch.float64)
+    nan_side = lambda: float("nan") if x[0] > 1 else float((x ** 2).sum() / 2)
+    ok, checks, _ = var.fd_check(nan_side, [x], [x.clone()], n_random=0)
+    assert not ok and math.isnan(checks[0][1])
+    ok, _, _ = var.fd_check(lambda: (nan_side(), 0), [x], [x.clone()], n_random=0)  # same cut: conclusive NaN
+    assert not ok
+
+
+def test_chain_check_gradient_compares_cuts():
+    """Chain's FD loss returns the cut signature of its environment: the same parameters give the
+    same signature, another chi another one; check_gradient passes with every direction conclusive."""
+    ch = chain(bp_state(2, steps=5), 2)
+    ch.loss()
+    sig = var.cut_signature(ch.last_env)
+    ch.loss()
+    assert var.cut_signature(ch.last_env) == sig
+    assert var.cut_signature(measure.ctm_env(ch.numpy_peps(), 3)) != var.cut_signature(measure.ctm_env(ch.numpy_peps(), 8))
+    with exact_svd_backward("zero"):
+        E, _ = ch.loss()
+        E.backward()
+    ch._last = (E.item(), {}, [p.detach().clone() for p in ch.params], [p.grad.clone() for p in ch.params], False)
+    ok, checks, _ = ch.check_gradient()
+    assert ok and all(fd is not None for _, fd in checks)
 
 
 def _fake_run_chain(monkeypatch, results):
