@@ -7,7 +7,8 @@ Thin wrapper around ``bbh_tri.runs.run_variational`` (also ``bbh-run`` with ``ta
 
 Seeds (``bbh_tri.runs`` docstring): a saved state (.pkl, or a chain checkpoint .pt), padded to D
 with ``--noise`` if dense and smaller; ``bp`` (EnvBP at D from a random product state); ``bp:NAME``
-(EnvBP at D from the product seed NAME: FM, FQ, AFQ, SU3); ``bp:PATH`` (EnvBP at D from a saved
+(EnvBP at D from the product seed NAME: FM, FQ, AFQ, SU3, AFM3 (theta-dependent reduced
+moment, ``states.afm3_vectors``), AFM3_120 (120° coherent)); ``bp:PATH`` (EnvBP at D from a saved
 state, e.g. truncating a D+1 state to D); or a product seed name (padded to D).
 
 ``--sym`` (SPEC §4.5): dense, U1, U1xU1 (theta = pi/4 only) or Z2xZ2. Symmetric tensors cannot be
@@ -67,7 +68,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--theta-over-pi", type=float, required=True)
     p.add_argument("--D", type=int, required=True)
-    p.add_argument("--seed", required=True, help="PATH | bp | bp:NAME | bp:PATH | FM | FQ | AFQ | SU3 | random")
+    p.add_argument("--seed", required=True, help="PATH | bp | bp:NAME | bp:PATH | FM | FQ | AFQ | SU3 | AFM3 | AFM3_120 | random")
     p.add_argument("--sym", default="dense", help="dense | U1 | U1xU1 | Z2xZ2")
     p.add_argument("--out", required=True, help="output prefix")
     p.add_argument("--chi", nargs="+", default=None, help="optimization chi stage(s), e.g. 75 or 3D2 4D2 (default 3D2)")
