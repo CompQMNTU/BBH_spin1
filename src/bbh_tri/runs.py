@@ -14,7 +14,8 @@ returns a result dict. Tasks:
 
 Seed specs (``seed``): a path (.pkl state or .pt checkpoint; dense states are padded up to D,
 symmetric ones must already be at D), ``bp`` (random product state evolved at D, dense),
-``bp:NAME`` (product seed NAME = FM, FQ, AFQ, SU3 evolved at D), ``bp:PATH`` (saved state evolved
+``bp:NAME`` (product seed NAME = FM, FQ, AFQ, SU3, AFM3, AFM3_120 evolved at D; AFM3 =
+``states.afm3_vectors`` at the run's couplings, AFM3_120 = the 120° coherent state), ``bp:PATH`` (saved state evolved
 at D: grows or truncates its bonds), ``random`` or NAME (product state, padded; dense only).
 """
 
@@ -116,6 +117,9 @@ def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", sch
     from . import evolve, lattice, operators, states, variational as var
     from .hamiltonian import Model
 
+    def vectors(name):  # AFM3 depends on the couplings; the other product seeds are fixed
+        return states.afm3_vectors(Model(theta, J2=J2, K2=K2))[1] if name == "AFM3" else states.seed_vectors(name)
+
     ops = operators.spin1(sym)
     geo = None if os.path.exists(spec) or (spec.startswith("bp:") and os.path.exists(spec[3:])) \
         else lattice.geometry(cell, dims=cell_dims)
@@ -131,7 +135,7 @@ def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", sch
             psi, done = states.random_product_peps(geo, ops, seed=rng), 0
         else:
             src = spec[3:]
-            psi = io.load_state(src, ops.config) if os.path.exists(src) else states.product_peps(geo, states.seed_vectors(src), ops)
+            psi = io.load_state(src, ops.config) if os.path.exists(src) else states.product_peps(geo, vectors(src), ops)
             done = 0
         res = evolve.evolve(psi, Model(theta, J2=J2, K2=K2), ops, D, schedule=taus[done:], deadline=deadline)
         if res.timed_out:
@@ -143,7 +147,7 @@ def seed_state(spec, D, theta, sym="dense", noise=1e-3, rng=0, cell="sqrt3", sch
     elif spec == "random":
         psi = states.random_product_peps(geo, ops, seed=rng)
     else:
-        psi = states.product_peps(geo, states.seed_vectors(spec), ops)
+        psi = states.product_peps(geo, vectors(spec), ops)
     dims = [d for s in psi.sites() for d in psi[s].get_shape()[:4]]
     if max(dims) > D:
         raise ValueError(f"seed has bond dimension {max(dims)} > D = {D} (use bp:PATH to truncate)")

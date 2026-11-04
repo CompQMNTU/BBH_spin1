@@ -32,7 +32,9 @@ def seed_vectors(kind):
     i.e. the time-reversal-invariant states |x> ~ |-1> - |+1>, |y> ~ |-1> + |+1> (real after a
     global phase), |z> = |0>; 'SU3' the orthogonal triad |+1>, |0>, |-1>.
     With J = cos(theta), K = sin(theta): E_SU3 = -J + 4K and E_AFQ = 3K, equal wherever J = K
-    (theta = pi/4 and 5pi/4). AFM3 has no fixed seed: use :func:`optimize_product_state`.
+    (theta = pi/4 and 5pi/4). 'AFM3_120' the 120° coherent states (full moment). The AFM3 product
+    optimum has a theta-dependent reduced moment: :func:`afm3_vectors` (seed name 'AFM3' in
+    ``runs.seed_state``) or :func:`optimize_product_state`.
     """
     up, zero, down = basis_state(1), basis_state(0), basis_state(-1)
     if kind == "FM":
@@ -43,7 +45,34 @@ def seed_vectors(kind):
         return ((down - up) / SQRT2, (down + up) / SQRT2, zero)
     if kind == "SU3":
         return (up, zero, down)
+    if kind == "AFM3_120":  # 120° spin-coherent states in the xz plane (full moment); real
+        return tuple(_rotate_y(2 * np.pi * k / 3) @ up for k in range(3))
     raise ValueError(f"unknown seed {kind!r}")
+
+
+def _rotate_y(phi):
+    """exp(-i phi Sy) in the canonical basis (real)."""
+    c, s = np.cos(phi), np.sin(phi)
+    return np.array([[(1 + c) / 2, -s / SQRT2, (1 - c) / 2],
+                     [s / SQRT2, c, -s / SQRT2],
+                     [(1 - c) / 2, s / SQRT2, (1 + c) / 2]])
+
+
+def afm3_vectors(model):
+    """AFM3 product seed at ``model``: the best state of the 120° coplanar family
+    R_y(2 pi k / 3) (cos b |+1> + sin b |-1>), k = 0, 1, 2, over the one parameter b.
+
+    Real, unlike :func:`optimize_product_state`'s output; b != 0 reduces the moment (b = 0 is the
+    120° coherent state ``seed_vectors('AFM3_120')``). For the NN model this family reaches the
+    general product optimum wherever it is AFM3-like (checked to 1e-10 at theta = 0 and
+    1.66-1.95 pi; tests). Returns (energy, (A, B, C)).
+    """
+    def vectors(b):
+        v = np.array([np.cos(b), 0.0, np.sin(b)])
+        return tuple(_rotate_y(2 * np.pi * k / 3) @ v for k in range(3))
+    res = scipy.optimize.minimize_scalar(lambda b: product_energy(model, vectors(b)), bounds=(-np.pi / 4, np.pi / 4),
+                                         method="bounded", options={"xatol": 1e-12})
+    return float(res.fun), vectors(res.x)
 
 
 def _bond_terms(model, ops):

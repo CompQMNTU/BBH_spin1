@@ -81,6 +81,39 @@ def test_afm3_reduced_moment(theta_pi, m_ref):
         assert e == pytest.approx(-4.9576, abs=1e-4)  # SPEC §3
 
 
+@pytest.mark.parametrize("theta_pi", [0.0, 1.66, 1.7, 1.87, 1.95])
+def test_afm3_seed_reaches_the_product_optimum(theta_pi):
+    """states.afm3_vectors (one-parameter 120° coplanar family, real) = the general complex optimum."""
+    m = Model(theta_pi * np.pi)
+    e_opt, _ = states.optimize_product_state(m, restarts=4)
+    e, vs = states.afm3_vectors(m)
+    assert e == pytest.approx(e_opt, abs=1e-10)
+    assert states.product_energy(m, vs) == pytest.approx(e, abs=1e-12)
+    assert all(np.isrealobj(v) for v in vs)
+    ms = [states.moment(v) for v in vs]
+    assert max(ms) - min(ms) < 1e-12
+
+
+def test_afm3_120_seed():
+    """The 120° coherent seed: full moment, E = -1.5 at theta = 0 (SPEC §3), = afm3_vectors there."""
+    vs = states.seed_vectors("AFM3_120")
+    assert all(states.moment(v) == pytest.approx(1) for v in vs)
+    assert states.product_energy(Model(0.0), vs) == pytest.approx(-1.5, abs=1e-12)
+    assert states.afm3_vectors(Model(0.0))[0] == pytest.approx(-1.5, abs=1e-12)
+
+
+@pytest.mark.parametrize("name", ["AFM3", "AFM3_120"])
+def test_afm3_seed_through_seed_state(name):
+    """runs.seed_state builds the AFM3 product PEPS at the run's theta; its CTM energy is the mean-field one."""
+    from bbh_tri import runs
+    theta = 1.87 * np.pi
+    psi = runs.seed_state(name, 1, theta)
+    ops = operators.spin1("dense")
+    env = measure.ctm_env(psi, 1)
+    vs = states.afm3_vectors(Model(theta))[1] if name == "AFM3" else states.seed_vectors(name)
+    assert measure.energy(psi, env, ops, Model(theta))[0] == pytest.approx(states.product_energy(Model(theta), vs), abs=1e-10)
+
+
 # --- full YASTN pipeline (PEPS -> CTM -> rdm / nsite) at D = 1 ---------------------------------
 
 PIPELINE_MODELS = [Model(0.0), Model(np.pi / 4), Model(1.7 * np.pi),
