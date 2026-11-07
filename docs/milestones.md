@@ -89,7 +89,39 @@ At the stalled D = 6 state a line scan along −g (χ = 108, |g| = 2.5e-3) raise
 
 **θ = 0 D ladder, dense (dgxsa1h).** Validated: D = 2 −1.7929888, D = 3 −1.8199089, D = 4 −1.831611(1) (χ = 4D² chain on GPU, stopped at step 122 by CUDA OOM at step 123, already stalling; χ = 48 / 64 / 96 agree to 1.1e-6; m = 0.8034, |Q| = 0.301), D = 5 −1.834132(5) (χ = 50 / 75 / 100: −1.8341286 / −1.8341326 / −1.8341325; m = 0.7874 on all three sites, |Q| = 0.284). D = 5 chain: unrolled on CPU at χ = 75 for 191 steps (ended by a system-wide OOM kill), then `ad: fp` on GPU from that state, 165 steps at χ = 75 and 35 at χ = 74, both ended by a cut collision (docs/ad_workflow.md §3; validated there: −1.834066(1)). After the gap-safe fp cut (PR #24), a new fp chain at χ = 74 from that step-35 state ran 321 steps (|g| 2e-3 → 3.5e-4, −6.7e-5): it stalled at step 301, the final FD gate rejected the stall exit (one random direction off by orders of magnitude; jumps of the gap-safe cut inside the FD stencil suspected, issue #26), the chain resumed from a perturbed step-300 state, and it was stopped by hand at step 321 (6e-8 gained in 20 steps). D = 4 and D = 5 are therefore variational upper bounds; the remaining gain is not estimated. Extrapolation (`configs/extrapolate_theta0.yaml`): D 2–5 → −1.8497 ± 0.0156, D 3–5 → −1.8457 ± 0.0116, D 4–5 → −1.8392 ± 0.0050, all consistent with −1.8368(5) (with the step-35 D = 5 value: −1.8496 / −1.8456 / −1.8390). The states and logs are on dgxsa1h (`~/bbh_runs/theta0/`; D = 5: `t0_D5_fp74g.pt`, step 321, also `t0_D5_fp74g.step321.pkl`).
 
-Open (SPEC §6 M4): EnvCTM full update (blocked upstream with 3-site gates, docs/yastn_findings.md); continue θ = 0 D = 5 with the gap-safe fp cut (issue #22 fixed; docs/ad_workflow.md §3); FQ/AFM3 hysteresis at 1.86–1.89π; gradient gate near θ ≈ 1.87π; profiling at D ≥ 4 (unrolled memory).
+**FQ vs AFM3 at 1.86–1.88π, D = 5 (2026-11-07).** Both branches optimized by AD on √3×√3 at χ_opt = 3D², validated at χ = 50 / 75 / 100 (CTM converged at every χ; energies below at χ = 75, the three χ agree to ≤ 4e-6).
+
+- AFM3, dense, `ad: fp` on GPU (dgxsa1h, `~/bbh_runs/fq_afm3/afm3/afm3_t{θ}_D5n3.*`): seeded from the AFM3 D = 4 state at the same θ with noise 0.03 (with noise 1e-3 the 1.87π chain stayed at the D = 4 energy, −3.7477934, and stopped as converged after 6 steps). D = 4 states come from a cold chain 1.95π → 1.85π, each θ seeded from the previous one.
+- FQ, U1, unrolled AD on CPU (lothlorien, run by a separate session; states and logs are there, not on dgxsa1h), χ = [75, 100], `max_sweeps` 50: seeded from the best D = 4 FQ state evolved at D = 5 (`bp:PATH`; 1.86π from the warm chain, 1.87π from cold_dn, 1.88π from cold). Peak memory 37 GB.
+
+| θ/π | AFM3 D = 4 | AFM3 D = 5 | FQ D = 4 | FQ D = 5 | AFM3 − FQ (D = 5) |
+|---|---|---|---|---|---|
+| 1.86 | −3.8961674 | −3.9067585 | −3.8865186 | −3.9002807 | −0.0065 |
+| 1.87 | −3.7477933 | −3.7575831 | −3.7253386 | −3.7380466 | −0.0195 |
+| 1.88 | −3.6007225 | −3.6088046 | −3.5607803 | −3.5763258 | −0.0325 |
+
+FQ D = 4 at χ = 48; at 1.86π from the warm chain (χ = 32 / 48 / 64: −3.8864621 / −3.8865186 / −3.8864964, |Q| 0.604, C₃ spread 0.003), at 1.87π and 1.88π from the cold chains.
+
+| θ/π | branch | stop, last \|g\| | h / v / d | m | \|Q\| | C₃ spread |
+|---|---|---|---|---|---|---|
+| 1.86 | AFM3 | max_steps 300, 5.7e-3 | −1.30429 / −1.30378 / −1.29869 | 0.509 | 0.460 | 0.006 |
+| 1.86 | FQ | max_steps 300, 3.2e-3 | −1.30474 / −1.30519 / −1.29035 | ≤ 1.5e-4 | 0.557 | 0.015 |
+| 1.87 | AFM3 | max_steps 300, 2.0e-3 | −1.25329 / −1.25323 / −1.25106 | 0.609 | 0.401 | 0.002 |
+| 1.87 | FQ | stalled (125 steps at χ = 75, 9 at 100), 1.9e-3 | −1.24923 / −1.24923 / −1.23959 | ≤ 1.5e-4 | 0.536 | 0.010 |
+| 1.88 | AFM3 | max_steps 300, 5.4e-3 | −1.20361 / −1.20459 / −1.20061 | 0.666 | 0.368 | 0.004 |
+| 1.88 | FQ | max_steps 300, 3.4e-3 | −1.19914 / −1.19914 / −1.17805 | ≤ 1.5e-4 | 0.511 | 0.021 |
+
+At equal D = 5, AFM3 is lower at all three θ, and the gap grows by ~0.013 per 0.01π. On the AFM3 side, m and |Q| depend smoothly on θ, with m shrinking by 0.03–0.06 from D = 4 to 5. The FQ states have m = 0 but are anisotropic: the d bonds lie 0.010–0.021 above h and v (AFM3: 0.002–0.005). FQ gains more per D than AFM3 (D = 4 → 5: 0.0138 / 0.0127 / 0.0155 vs 0.0106 / 0.0098 / 0.0081 at 1.86 / 1.87 / 1.88π), so the equal-D gap shrinks towards D → ∞. Extrapolation with the paper's 1/D method (midpoint of lowest E and 1/D intercept; FQ D = 3 validated at χ = 2D²):
+
+| θ/π | FQ D 4–5 | FQ D 3–5 | AFM3 D 4–5 | AFM3 − FQ (D 4–5 / FQ D 3–5) |
+|---|---|---|---|---|
+| 1.86 | −3.9278 ± 0.0275 | −3.9284 ± 0.0281 | −3.9279 ± 0.0212 | −0.0001 / +0.0004 |
+| 1.87 | −3.7635 ± 0.0254 | −3.7673 ± 0.0292 | −3.7772 ± 0.0196 | −0.0137 / −0.0099 |
+| 1.88 | −3.6074 ± 0.0311 | −3.6081 ± 0.0318 | −3.6250 ± 0.0162 | −0.0176 / −0.0168 |
+
+The central estimates cross at ≈ 1.86π, ~0.013π below the paper's θ_c = 1.873(7)π (SPEC §3, full update, FQ to D = 11, AFM3 to D = 9). The difference is not significant: each extrapolated energy carries an error of 0.016–0.03, larger than every difference in the table, and the difference changes by only ~0.9 per unit θ/π between 1.86π and 1.88π (~1.4 between 1.86π and 1.87π), so the energy errors translate into ±0.02–0.03π in θ_c. The FQ D = 4 and 5 states at 1.86π descend from the warm chain, which at 1.87π lay ~1e-3 above the cold one; FQ at 1.86π is probably ~1e-3 too high, which moves θ_c slightly down, well inside the error. The data are consistent with the paper. Further caveats: every chain stopped with \|g\| ~ 2–6e-3 (the AFM3 chains at the step limit), so all energies are upper bounds with unestimated remaining gain; AFM3 has no D = 3 point in the fit; two-point (D 4–5) extrapolations have no internal check of linearity in 1/D. At 1.85π the cold AFM3 D = 4 chain lost its moment (m = 0.037, |Q| = 0.602, E = −4.0482718), so the AFM3 branch ends between 1.85π and 1.86π at D = 4. The D = 4 BP scan (M3) found FQ best up to 1.875π (E = −3.6253724 there), but AD AFM3 at D = 4 is lower at both 1.87π and 1.88π; the BP scan's AFM3 starts were poor here. 1.89π is left out: the FQ chain was killed for lack of memory on the machine (not by its own 60 GB cap) and stood unconverged at step 155 with \|g\| = 2.8e-2 (E = −3.4103625 vs AFM3 −3.4626282).
+
+Open (SPEC §6 M4): EnvCTM full update (blocked upstream with 3-site gates, docs/yastn_findings.md); continue θ = 0 D = 5 with the gap-safe fp cut (issue #22 fixed; docs/ad_workflow.md §3); FQ/AFM3 at 1.86–1.88π: D ≥ 6 to shrink the extrapolation errors (θ_c ≈ 1.86π, not significant), an AFM3 D = 3 point, and points below 1.86π to bracket the crossing; gradient gate near θ ≈ 1.87π; profiling at D ≥ 4 (unrolled memory).
 
 ## M5 — NNN extension (2026-10-27, issue #19)
 
