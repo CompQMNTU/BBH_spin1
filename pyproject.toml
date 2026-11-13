@@ -45,7 +45,7 @@ yastn = { git = "https://github.com/yastn/yastn", rev = "7ed8ad0e6fd849bae5ecaf5
 # from the CUDA 13.0 index (needs an NVIDIA driver >= 580). Same torch version on both.
 torch = [
     { index = "pytorch-cpu", extra = "ad" },
-    { index = "pytorch-cu130", extra = "cuda" },
+    { index = "pytorch-cu126", extra = "cuda" },
 ]
 
 [tool.uv]
@@ -57,7 +57,7 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
