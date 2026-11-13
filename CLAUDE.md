@@ -10,7 +10,7 @@ Python via **uv only**. Never pip/conda into the env.
 ```
 uv sync                                # base env (numpy backend)
 uv sync --extra ad                     # + torch (CPU wheel index) for AD / fp_ctmrg
-uv sync --extra cuda                   # same torch from the CUDA 13.0 index (GPU nodes); conflicts with `ad`
+uv sync --extra cuda                   # same torch from the CUDA 12.6 index (GPU nodes, incl. Nano5); conflicts with `ad`
 uv run pytest -q                       # default suite, skips `slow` (~2.5 min under load)
 uv run pytest -m "slow or not slow"    # everything incl. FD gradient checks and M3 evolution (~8 min under load)
 uv run pytest -m slow                  # slow only (ED, gradient checks)
