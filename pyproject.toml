@@ -42,7 +42,7 @@ addopts = "-m 'not slow'"
 [tool.uv.sources]
 yastn = { git = "https://github.com/yastn/yastn", rev = "7ed8ad0e6fd849bae5ecaf545a8d3d5027005501" }
 # torch for AD: `--extra ad` from the CPU-only wheel index (avoids pulling CUDA), `--extra cuda`
-# from the CUDA 13.0 index (needs an NVIDIA driver >= 580). Same torch version on both.
+# from the CUDA 12.6 index (cu126, needed on Nano5). Same torch version on both.
 torch = [
     { index = "pytorch-cpu", extra = "ad" },
     { index = "pytorch-cu126", extra = "cuda" },
