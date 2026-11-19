@@ -187,3 +187,26 @@ def test_chirality_of_an_entangled_complex_state(tetrahedral):
             ref = sum(sg * env.measure_nsite_exact(S[a], S[b], S[c], sites=tri) for (a, b, c), sg in eps)
             assert abs(chi[name][s]) > 1e-2
             assert chi[name][s] == pytest.approx(np.real(ref), abs=1e-11)
+
+
+def test_commensurability_uses_the_cell_period():
+    """M1 alternates along a1; a cell 13 columns long (odd, beyond a fixed ±6 window) cannot host it."""
+    assert not measure.commensurate(lattice.geometry("patch", (2, 13)), measure.MOMENTA["M1"])
+    assert measure.commensurate(lattice.geometry("patch", (2, 14)), measure.MOMENTA["M1"])
+
+
+def test_charged_sector_lengths_are_normalized_by_the_neutral_eigenvalue():
+    """U1 D = 3 state: <S+_0 S-_r> decays with the charge-±1 sector, normalized by the leading
+    neutral eigenvalue; all k charged eigenvalues are kept. Over r = 3 -> 9 its effective length
+    lies just below the leading charged length (0.576 vs 0.593), which exceeds every neutral one."""
+    ops = operators.spin1("U1")
+    psi = states.product_peps(SQRT3, states.seed_vectors("FQ"), ops)
+    evolve.evolve(psi, Model(1.6 * np.pi), ops, 3, schedule=(0.1,), max_steps=30)
+    env, info = measure.ctm_env(psi, 12, return_info=True)
+    assert info.converged
+    xi_c = measure.correlation_lengths(env, "h", k=3, charge=1)
+    assert len(xi_c) == 3 and np.all(np.diff(xi_c) <= 1e-12)
+    assert xi_c[0] > measure.correlation_lengths(env, "h", k=3)[0]
+    v = [np.real(env.measure_line(ops.sp(), ops.sm(), sites=[Site(0, 0), Site(0, r)])) for r in (3, 9)]
+    xi_eff = -6 / np.log(abs(v[1] / v[0]))
+    assert 0.9 * xi_c[0] < xi_eff <= xi_c[0]

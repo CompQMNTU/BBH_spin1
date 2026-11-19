@@ -135,11 +135,14 @@ def _phase(q, site):
     return np.exp(2j * np.pi * (q[0] * site[0] + q[1] * site[1]))
 
 
-def commensurate(geo, q, box=6, tol=1e-10):
-    """Whether the phase of ``q`` is the same on all sites sharing a unit-cell tensor of ``geo``."""
+def commensurate(geo, q, tol=1e-10):
+    """Whether the phase of ``q`` is the same on all sites sharing a unit-cell tensor of ``geo``.
+
+    Samples rows 0..2 Nx and columns 0..2 Ny, which contains a translate of every site by each
+    cell period (the periods have components at most (Nx, Ny))."""
     ref = {}
-    for r in range(-box, box + 1):
-        for c in range(-box, box + 1):
+    for r in range(2 * geo.Nx + 1):
+        for c in range(2 * geo.Ny + 1):
             k = geo.site2index((r, c))
             p = _phase(q, (r, c))
             if abs(ref.setdefault(k, p) - p) > tol:
@@ -272,8 +275,20 @@ def correlation_lengths(env, dirn="h", k=3, index=0, charge=None, dtype="float64
     distance along a1 ('h', L = Ny) or a2 ('v', L = Nx), from the leading eigenvalues of the
     period-L CTM transfer matrix through row (or column) ``index`` (``EnvCTM.transfer_matrix_spectrum``,
     numpy backend only). ``charge``: symmetry sector of the eigenvectors (None: zero charge); in
-    symmetric configs correlations of charged operators decay with other sectors' eigenvalues."""
+    symmetric configs correlations of charged operators decay with other sectors' eigenvalues.
+
+    Every eigenvalue is normalized by the leading one of the zero-charge sector, which normalizes
+    the state. Zero charge: its k - 1 subleading eigenvalues give k - 1 lengths. Nonzero
+    ``charge``: all k eigenvalues of that sector are kept (k lengths)."""
     L = env.Ny if dirn == "h" else env.Nx
-    lam = np.asarray(env.transfer_matrix_spectrum(k=k, n=charge, dirn=dirn, i=index, dtype=dtype))
-    lam = lam[np.argsort(-np.abs(lam))]
-    return -L / np.log(np.abs(lam[1:]) / np.abs(lam[0]))
+
+    def spectrum(n, kk):
+        lam = np.abs(np.asarray(env.transfer_matrix_spectrum(k=kk, n=n, dirn=dirn, i=index, dtype=dtype)))
+        return np.sort(lam)[::-1]
+
+    if charge is None:
+        lam = spectrum(None, k)
+        lam0, lam = lam[0], lam[1:]
+    else:
+        lam0, lam = spectrum(None, 2)[0], spectrum(charge, k)
+    return -L / np.log(lam / lam0)
