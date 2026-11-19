@@ -231,6 +231,47 @@ def two_site_terms(ops, op2):
     return out
 
 
+def matrix_terms(ops, M, tol=1e-12):
+    """[(c, [A_1, ..., A_n])] with M = sum c A_1 ⊗ ... ⊗ A_n for an n-site matrix M in the canonical
+    basis (rows (out1, ..., outn), columns (in1, ..., inn)). Each A_k is a config-basis transition
+    operator |a><b| (one charge, unit element), so the coefficient c is a Python scalar and the
+    operators stay real. :class:`SymSpin1` only; used for correlations and chirality, whose
+    operators (S·S, triple products) have no single-site expansion of definite charge there."""
+    if not is_matrix_built(ops):
+        raise TypeError("matrix_terms needs a SymSpin1 operator set (U1xU1, Z2xZ2)")
+    M = np.asarray(M, dtype=complex)
+    n = int(round(np.log(M.shape[0]) / np.log(3)))
+    U = ops.basis
+    Un = U
+    for _ in range(n - 1):
+        Un = np.kron(Un, U)
+    A = (Un.conj().T @ M @ Un).reshape((3,) * (2 * n))  # config basis, (out1..outn, in1..inn)
+    cache, out = {}, []
+    for ix in zip(*np.nonzero(np.abs(A) > tol)):
+        c = A[ix].item()
+        c = c.real if abs(c.imag) <= tol else c
+        legs = []
+        for k in range(n):
+            key = (ix[k], ix[n + k])
+            if key not in cache:
+                E = np.zeros((3, 3))
+                E[key] = 1
+                cache[key] = ops.operator(U @ E @ U.conj().T)
+            legs.append(cache[key])
+        out.append((c, legs))
+    return out
+
+
+def chirality_matrix():
+    """S_1·(S_2 × S_3) = sum_abc eps_abc S1^a S2^b S3^c as a 27 x 27 canonical-basis matrix."""
+    S = [as_matrix(_DENSE, o) for o in spin_vector(_DENSE).values()]  # Sx, Sy, Sz
+    out = np.zeros((27, 27), complex)
+    for (a, b, c), sgn in (((0, 1, 2), 1), ((1, 2, 0), 1), ((2, 0, 1), 1),
+                           ((0, 2, 1), -1), ((2, 1, 0), -1), ((1, 0, 2), -1)):
+        out += sgn * np.kron(np.kron(S[a], S[b]), S[c])
+    return out
+
+
 def _full_numpy(ops, op):
     """``op.to_numpy()`` on full physical legs. A charged U1 operator (e.g. S+) stores only the
     sectors it connects, so a bare ``to_numpy()`` would return a smaller array."""

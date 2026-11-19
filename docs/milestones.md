@@ -152,3 +152,16 @@ Design decisions:
 - **Seeds.** `bp:PATH` evolves a saved state at D with EnvBP (grows or truncates bonds): the D = 5 reseed from the D = 6 state, 5e-3 below the bp:SU3 chain, used it (scratch script before).
 
 Open: HDF5 output (SPEC §5 asks for HDF5/JSON; results are JSON + pickles); `bbh-hysteresis` (needs the FQ/AFM3 study); the SLURM template is untested.
+
+## M6 — Physics scans (in progress, 2026-11-19)
+
+**Observables** (`measure.py`, `tests/test_correlations.py`), the measurement side of the J₂ cuts (SPEC §4.3, §6):
+- `ordered_moments`: m(q), Q(q) at Γ, K, M1–M3 from the one-site expectations, F_X(q) = (1/N) Σ_s e^{−iq·r_s}⟨X_s⟩, with K' folded into K (weight 2). Normalized so that 120° gives m(K) = m, a stripe m(M_i) = m, tetrahedral order m(M_i) = m/√3 each, FQ Q(Γ) = |Q|, AFQ Q(K) = |Q|. Momenta are (q_row, q_col) in units of 2π (`MOMENTA`). Only momenta commensurate with the cell are reported (sqrt3: Γ, K; (2, 2): Γ, M; (6, 6): all), and requesting another raises. Tests: product-state values and Parseval over complete momentum sets.
+- `correlations`: ⟨S₀·S_r⟩ and ⟨Q₀·Q_r⟩ (Q·Q = 2(S·S)² + S·S − 8/3), optionally connected, along a1 ('h') or a2 ('v'), r = 1..rmax, by exact line contraction (`EnvCTM.measure_line`). Checked against the bond rdms at r = 1, an exact 1×3 window at r = 2, and factorization on product states. The cost grows like rmax² per start site (each r is a new contraction). Correlations along a1 − a2 are not implemented.
+- `chiralities`: ⟨S₁·(S₂×S₃)⟩ on the up and down triangle of each cell site, counterclockwise for a1 = (1, 0), a2 = (1/2, √3/2), via `measure_2x2`. Checked on the tetrahedral product state (4/(3√3)) and on an NN-evolved complex D = 2 state against the ε_abc expansion through `measure_nsite_exact`. A real PEPS in the Sz basis gives exactly 0, so a chiral state needs a complex config.
+- `correlation_lengths`: ξ_j = −L/ln|λ_j/λ₀| from the CTM transfer-matrix spectrum (numpy only; `charge` selects the sector in symmetric configs). At D = 3 (θ = 0.2π, χ = 12) the connected S and Q correlations decay faster than ξ₁: the leading mode does not couple to them; the test checks only ξ_eff ≤ ξ₁.
+- Symmetric configs: U1 uses the S± expansion. U1×U1 and Z2×Z2 expand S·S, (S·S)² and the triple product into config-basis transition operators (`operators.matrix_terms`), which costs several times more contractions. All three agree with their dense copies to 1e-11.
+
+The test states have small χ because a plain χ cut does not converge there: the D = 3 test state at χ = 18 runs 200 sweeps to max_dsv 1e-7, while χ = 12 converges. Use `gap_safe_truncation` in production measurements.
+
+Open: cost of `correlations` at D = 5, χ = 75 (not measured; a one-sweep variant that reuses the left environment would be linear in rmax); full S(q) from window sums; ⟨S·S⟩ along a1 − a2; adding these observables to the `validate` records.
