@@ -278,7 +278,8 @@ def correlation_lengths(env, dirn="h", k=3, index=0, charge=None, dtype="float64
     symmetric configs correlations of charged operators decay with other sectors' eigenvalues.
 
     Every eigenvalue is normalized by the leading one of the zero-charge sector, which normalizes
-    the state. Zero charge: its k - 1 subleading eigenvalues give k - 1 lengths. Nonzero
+    the state. Zero charge (None, 0 or a tuple of zeros): its k - 1 subleading eigenvalues give
+    k - 1 lengths. Nonzero
     ``charge``: all k eigenvalues of that sector are kept (k lengths)."""
     L = env.Ny if dirn == "h" else env.Nx
 
@@ -286,7 +287,7 @@ def correlation_lengths(env, dirn="h", k=3, index=0, charge=None, dtype="float64
         lam = np.abs(np.asarray(env.transfer_matrix_spectrum(k=kk, n=n, dirn=dirn, i=index, dtype=dtype)))
         return np.sort(lam)[::-1]
 
-    if charge is None:
+    if charge is None or np.all(np.asarray(charge) == 0):  # explicit zero charge = the neutral sector
         lam = spectrum(None, k)
         lam0, lam = lam[0], lam[1:]
     else:

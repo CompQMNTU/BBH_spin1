@@ -206,7 +206,9 @@ def test_charged_sector_lengths_are_normalized_by_the_neutral_eigenvalue():
     assert info.converged
     xi_c = measure.correlation_lengths(env, "h", k=3, charge=1)
     assert len(xi_c) == 3 and np.all(np.diff(xi_c) <= 1e-12)
-    assert xi_c[0] > measure.correlation_lengths(env, "h", k=3)[0]
+    xi_0 = measure.correlation_lengths(env, "h", k=3)
+    assert xi_c[0] > xi_0[0]
+    assert np.allclose(measure.correlation_lengths(env, "h", k=3, charge=0), xi_0, rtol=1e-6)  # explicit zero charge
     v = [np.real(env.measure_line(ops.sp(), ops.sm(), sites=[Site(0, 0), Site(0, r)])) for r in (3, 9)]
     xi_eff = -6 / np.log(abs(v[1] / v[0]))
     assert 0.9 * xi_c[0] < xi_eff <= xi_c[0]
