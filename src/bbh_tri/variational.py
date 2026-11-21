@@ -502,13 +502,16 @@ def _ctm_meta(ctm):
     return repr({k: v for k, v in ctm.items() if k != "max_sweeps"})
 
 
-def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500, eps_multiplet=1e-6):
+def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500, eps_multiplet=1e-6, observables=False,
+             corr_rmax=0):
     """Re-measure a (numpy) PEPS at each chi in ``chis`` (docs/ad_workflow.md §4).
 
     CTM truncation keeps multiplets whole (``gap_safe_truncation``), so the effective chi can be a
     little below the nominal one. Returns {"energies": {chi: E}, "class_energies": {chi: {...}},
     "ctm_converged": {chi: bool}, "order": {site: (m, |Q|)} at the largest chi, "c3_spread": max - min
-    of the h/v/d class energies at the largest chi}.
+    of the h/v/d class energies at the largest chi}. ``observables``: also "observables" at the
+    largest chi (``measure.observables``: m(q), Q(q), chirality, correlation lengths, and connected
+    correlations up to ``corr_rmax``; 0 skips those).
     """
     ops = operators.spin1(psi[psi.sites()[0]].config.sym.SYM_ID)
     out = {"energies": {}, "class_energies": {}, "ctm_converged": {}}
@@ -521,4 +524,6 @@ def validate(psi, model, chis, corner_tol=1e-10, max_sweeps=500, eps_multiplet=1
     nn = [by_class[c] for c in ("h", "v", "d") if c in by_class]
     out["c3_spread"] = max(nn) - min(nn)
     out["order"] = {tuple(s): tuple(map(float, v)) for s, v in measure.order_parameters(psi, env, ops).items()}
+    if observables:
+        out["observables"] = {"chi": max(chis), **measure.observables(psi, env, ops, rmax=corr_rmax)}
     return out

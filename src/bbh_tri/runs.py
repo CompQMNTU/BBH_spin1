@@ -37,7 +37,8 @@ VARIATIONAL = {**COMMON, **NNN, "theta_over_pi": None, "D": None, "seed": None, 
                "cell": "sqrt3", "cell_dims": None, "chi": None, "max_steps": 200, "noise": 1e-3, "rng": 0, "max_sweeps": 100,
                "ad": "unrolled", "device": "cpu", "max_hours": None, "tol_E": 1e-8, "tol_grad": 1e-6,
                "stall_window": 5, "stall_min_evals": 25, "stall_gain": 2e-8,
-               "validate": True, "validate_chi": None, "validate_reserve_hours": 0, "schedule": None}
+               "validate": True, "validate_chi": None, "validate_reserve_hours": 0, "schedule": None,
+               "observables": True, "corr_rmax": 6}
 
 # gradient of the CTM energy (variational.Chain): backpropagation through every sweep, or implicit
 # differentiation of the fixed point (fp_ctmrg; docs/ad_workflow.md §3)
@@ -47,7 +48,7 @@ AD_MODES = ("unrolled", "fp")
 INIT_KEYS = ("seed", "noise", "rng", "schedule", "cell", "cell_dims")
 
 VALIDATE = {**COMMON, **NNN, "state": None, "theta_over_pi": None, "sym": "dense", "chi": None, "out": None,
-            "corner_tol": 1e-10, "max_sweeps": 500}
+            "corner_tol": 1e-10, "max_sweeps": 500, "observables": True, "corr_rmax": 6}
 
 SEED = {**COMMON, **NNN, "seed": None, "D": None, "theta_over_pi": None, "sym": "dense", "cell": "sqrt3", "cell_dims": None,
         "out": None,
@@ -320,10 +321,13 @@ def run_variational(cfg, log=print):
         for c in vchis:  # one chi at a time, so that the deadline is checked between them
             if deadline is not None and time.time() >= deadline:
                 break
-            done[c] = var.validate(psi, model, [c])
+            done[c] = var.validate(psi, model, [c], observables=bool(o["observables"]) and c == vchis[-1],
+                                   corr_rmax=int(o["corr_rmax"]))
         if len(done) == len(vchis):
             val = {key: {c: done[c][key][c] for c in vchis} for key in ("energies", "class_energies", "ctm_converged")}
             val.update(c3_spread=done[vchis[-1]]["c3_spread"], order=done[vchis[-1]]["order"])
+            if "observables" in done[vchis[-1]]:
+                val["observables"] = done[vchis[-1]]["observables"]
             rec["validation_interim" if interim else "validation"] = {
                 **val, "order": {str(s): v for s, v in val["order"].items()}}
         else:  # an incomplete validation is kept apart: extrapolate reads only "validation"
@@ -376,7 +380,8 @@ def run_validate(cfg):
     D = max(d for s in psi.sites() for d in psi[s].get_shape()[:4])
     chis = o["chi"] if isinstance(o["chi"], (list, tuple)) else [o["chi"]]
     val = var.validate(psi, model_of(o), [int(c) for c in chis],
-                       corner_tol=o["corner_tol"], max_sweeps=o["max_sweeps"])
+                       corner_tol=o["corner_tol"], max_sweeps=o["max_sweeps"],
+                       observables=bool(o["observables"]), corr_rmax=int(o["corr_rmax"]))
     rec = {"task": "validate", "state": o["state"], **model_id(o), "sym": o["sym"], "D": D,
            **val, "order": {str(s): v for s, v in val["order"].items()}, "options": o, "metadata": io.metadata()}
     if o["out"]:

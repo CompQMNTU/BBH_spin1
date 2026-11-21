@@ -6,3 +6,5 @@ sym: U1xU1
 state: results/m4/pi4_D5_U1xU1.pkl
 chi: [50, 75, 100]
 out: "{state}.validate.json"
+# M6 observables at the largest chi (on by default): m(q), Q(q), chirality, xi, correlations to r = corr_rmax
+# corr_rmax: 6

@@ -277,6 +277,9 @@ def correlation_lengths(env, dirn="h", k=3, index=0, charge=None, dtype="float64
     numpy backend only). ``charge``: symmetry sector of the eigenvectors (None: zero charge); in
     symmetric configs correlations of charged operators decay with other sectors' eigenvalues.
 
+    Fewer lengths (possibly none) come back when the transfer matrix is too small for ARPACK
+    (k < N - 1, e.g. a D = 1 state at small chi).
+
     Every eigenvalue is normalized by the leading one of the zero-charge sector, which normalizes
     the state. Zero charge (None, 0 or a tuple of zeros): its k - 1 subleading eigenvalues give
     k - 1 lengths. Nonzero
@@ -284,12 +287,39 @@ def correlation_lengths(env, dirn="h", k=3, index=0, charge=None, dtype="float64
     L = env.Ny if dirn == "h" else env.Nx
 
     def spectrum(n, kk):
-        lam = np.abs(np.asarray(env.transfer_matrix_spectrum(k=kk, n=n, dirn=dirn, i=index, dtype=dtype)))
-        return np.sort(lam)[::-1]
+        for kk in range(kk, 0, -1):  # ARPACK needs k < N - 1: tiny environments (e.g. D = 1) give fewer
+            try:
+                lam = np.abs(np.asarray(env.transfer_matrix_spectrum(k=kk, n=n, dirn=dirn, i=index, dtype=dtype)))
+                return np.sort(lam)[::-1]
+            except TypeError:
+                continue
+        return np.zeros(0)
 
     if charge is None or np.all(np.asarray(charge) == 0):  # explicit zero charge = the neutral sector
         lam = spectrum(None, k)
+        if len(lam) < 2:
+            return np.zeros(0)
         lam0, lam = lam[0], lam[1:]
     else:
-        lam0, lam = spectrum(None, 2)[0], spectrum(charge, k)
+        lam0 = spectrum(None, 2)
+        if not len(lam0):
+            return np.zeros(0)
+        lam0, lam = lam0[0], spectrum(charge, k)
     return -L / np.log(lam / lam0)
+
+
+def observables(psi, env, ops, rmax=6, dirs=("h", "v"), xi_k=4):
+    """JSON-ready M6 observables of one environment (for ``variational.validate`` records):
+    {"ordered_moments": {q: [m(q), Q(q)]}, "chirality": {"up" | "down": {site: chi}},
+    "correlations": {dirn: {"SS" | "QQ": {site: [connected C(r), r = 1..rmax]}}},
+    "correlation_lengths": {dirn: [xi_1, ...]} (zero-charge sector, ``xi_k`` eigenvalues)}.
+    ``rmax`` = 0 skips the correlations (their cost grows like rmax^2)."""
+    out = {"ordered_moments": {q: [float(m), float(Q)] for q, (m, Q) in ordered_moments(psi, env, ops).items()},
+           "chirality": {k: {str(tuple(s)): float(v) for s, v in d.items()} for k, d in chiralities(psi, env, ops).items()}}
+    if rmax:
+        out["correlations"] = {d: {kind: {str(tuple(s)): [float(x) for x in v] for s, v in by_site.items()}
+                                   for kind, by_site in correlations(psi, env, ops, dirn=d, rmax=rmax, connected=True).items()}
+                               for d in dirs}
+    if xi_k:
+        out["correlation_lengths"] = {d: [float(x) for x in correlation_lengths(env, d, k=xi_k)] for d in dirs}
+    return out
