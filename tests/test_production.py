@@ -289,7 +289,7 @@ def test_variational_task_escalates_chi_and_resumes(tmp_path):
     assert os.path.exists(out + ".pt") and os.path.exists(out + ".chi12.pt") and os.path.exists(out + ".pkl")
     assert {h["chi"] for h in rec["history"]} == {8, 12} and rec["metadata"]["yastn"]
     assert rec["energy_opt"] == [h for h in rec["history"] if h["chi"] == 12][-1]["energy"]
-    assert set(rec["validation"]["energies"]) == {8}
+    assert set(rec["validation"]["energies"]) == {8} and rec["validation"]["observables"]["chi"] == 8
     again = runs.run_variational(cfg, log=lambda s: None)  # finished: rewrites the outputs only
     assert again["history"] == rec["history"]
     assert len(again["sessions"]) == 2 and again["init"]["seed"] == "bp"  # every session is kept
@@ -445,6 +445,25 @@ def test_validation_stops_at_the_deadline_and_reserve_shortens_the_optimization(
     assert "validation" not in rec and set(rec["validation_interim"]["energies"]) == {6}
 
 
+@torch_needed
+def test_variational_validation_measures_observables_at_the_largest_chi_only(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from bbh_tri import variational as var
+    real_validate, seen = var.validate, []
+
+    def validate(psi, model, chis, **kw):
+        seen.append((chis, kw["observables"]))
+        return real_validate(psi, model, chis, **kw)
+    monkeypatch.setattr(var, "validate", validate)
+    cfg = {"theta_over_pi": 0.25, "D": 2, "seed": "FM", "out": str(tmp_path / "r"), "chi": 8, "max_steps": 1,
+           "validate_chi": [6, 8]}
+    rec = runs.run_variational(cfg, log=lambda s: None)
+    assert seen == [([6], False), ([8], True)] and rec["validation"]["observables"]["chi"] == 8
+    seen.clear()
+    rec = runs.run_variational({**cfg, "out": str(tmp_path / "q"), "observables": False}, log=lambda s: None)
+    assert seen == [([6], False), ([8], False)] and "observables" not in rec["validation"]
+
+
 def test_validate_task_records_D(tmp_path):
     p = str(tmp_path / "d1.pkl")
     io.save_state(p, states.product_peps(lattice.geometry("sqrt3"), states.seed_vectors("FM"), operators.spin1("dense")))
@@ -457,6 +476,22 @@ def test_validate_task_records_D(tmp_path):
                                                                     (0.75, "dense", 0.0, 0.0))
     r2 = runs.run_validate({"state": p, "theta_over_pi": 0.75, "J2": -0.2, "K2": 0.1, "chi": [1]})
     assert r2["J2"] == -0.2 and r2["energies"][1] == pytest.approx(r["energies"][2] + 3 * (-0.2 + 0.1))  # FM: S.S = 1
+
+
+def test_validate_task_records_observables(tmp_path):
+    """M6 observables at the largest chi: FM product state, m(Γ) = 1 and |Q|(Γ) = 1/√3 (SPEC §3),
+    connected correlations 0; ``observables: false`` leaves them out."""
+    p = str(tmp_path / "fm.pkl")
+    io.save_state(p, states.product_peps(lattice.geometry("sqrt3"), states.seed_vectors("FM"), operators.spin1("dense")))
+    r = runs.run_validate({"state": p, "theta_over_pi": 0.75, "chi": [1, 2], "corr_rmax": 2, "out": str(tmp_path / "v.json")})
+    obs = io.read_json(str(tmp_path / "v.json"))["observables"]
+    assert obs == json.loads(json.dumps(r["observables"])) and obs["chi"] == 2
+    assert obs["ordered_moments"]["Gamma"] == pytest.approx([1, 1 / np.sqrt(3)], abs=1e-12)
+    assert set(obs["chirality"]) == {"up", "down"} and set(obs["correlations"]) == {"h", "v"}
+    assert all(abs(x) < 1e-12 for d in obs["correlations"].values() for k in d.values() for v in k.values() for x in v)
+    assert all(len(v) == 2 for v in obs["correlations"]["h"]["SS"].values())
+    assert "observables" not in runs.run_validate({"state": p, "theta_over_pi": 0.75, "chi": [1], "observables": False})
+    assert "correlations" not in runs.run_validate({"state": p, "theta_over_pi": 0.75, "chi": [1], "corr_rmax": 0})["observables"]
 
 
 def test_seed_task_truncates_a_saved_state(tmp_path):
